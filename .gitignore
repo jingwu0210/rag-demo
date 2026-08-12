@@ -14,7 +14,9 @@ data/ocr/*
 data/logs/*
 data/eval/results/*
 data/cache.db
+!data/**/.gitkeep
 
 # 环境
 .env
 .DS_Store
+.superpowers/
