@@ -166,6 +166,31 @@ def test_bm25_retriever_lazy_index_build():
         assert result.docs[0].chunk_id == "c1"
 
 
+def test_bm25_retriever_empty_collection_returns_empty():
+    from core.retriever import BM25Retriever
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _init_store(tmp)  # 空集合
+        retriever = BM25Retriever(store)
+        result = retriever.retrieve("年假", top_k=5)
+        assert result.docs == []  # 不抛 ZeroDivisionError
+
+
+def test_bm25_retriever_all_inactive_returns_empty():
+    from core.retriever import BM25Retriever
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _init_store(tmp)
+        _add_chunks(store, [
+            {"id": "del1", "text": "已废弃文档A", "metadata": {"doc_type": "handbook", "is_active": False}},
+            {"id": "del2", "text": "已废弃文档B", "metadata": {"doc_type": "technical", "is_active": False}},
+        ])
+        retriever = BM25Retriever(store)
+        retriever.build_index()
+        result = retriever.retrieve("年假", top_k=5)
+        assert result.docs == []
+
+
 # ── 5. HybridRetriever ───────────────────────────────────────
 
 def test_hybrid_retriever_rrf_ordering():
@@ -189,6 +214,37 @@ def test_hybrid_retriever_rrf_ordering():
         scores = [d.score for d in result.docs]
         assert scores == sorted(scores, reverse=True)
         assert all(s > 0 for s in scores)
+
+
+def test_hybrid_retriever_empty_collection_no_exception():
+    from core.retriever import HybridRetriever
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _init_store(tmp)  # 空集合
+        retriever = HybridRetriever(store, _mock_embedder())
+        result = retriever.retrieve("年假")
+        assert result.mode == "hybrid"
+        assert result.docs == []
+
+
+def test_hybrid_retriever_empty_bm25_side_uses_vector_only():
+    from core.retriever import HybridRetriever
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _init_store(tmp)
+        retriever = HybridRetriever(store, _mock_embedder())
+        # 首次检索：空库 → BM25 索引建成空语料
+        assert retriever.retrieve("年假").docs == []
+        # 之后入库：vector 侧可查到，BM25 侧仍为空 → 仅 vector 结果参与 RRF
+        _add_chunks(store, [
+            {"id": "h1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True}},
+            {"id": "t1", "text": "API 技术规范文档", "metadata": {"doc_type": "technical", "is_active": True}},
+        ])
+        result = retriever.retrieve("年假")
+        assert result.mode == "hybrid"
+        assert result.docs  # 非空，不抛异常
+        assert {d.chunk_id for d in result.docs} == {"h1", "t1"}
+        assert all(d.score > 0 for d in result.docs)  # rrf 分数（仅 vector 一路贡献）
 
 
 # ── 6. Retriever 门面 ────────────────────────────────────────

@@ -121,22 +121,30 @@ class BM25Retriever(BaseRetriever):
     def __init__(self, chroma_store: ChromaStore):
         super().__init__(chroma_store)
         self._bm25 = None
+        self._index_built = False
         self._ids: List[str] = []
         self._texts: List[str] = []
         self._metadatas: List[Dict[str, Any]] = []
 
     def build_index(self) -> None:
-        """拉全量 is_active chunks，tokenize，建 BM25Okapi"""
+        """拉全量 is_active chunks，tokenize，建 BM25Okapi；空语料不建索引（BM25Okapi([]) 会 ZeroDivisionError）"""
         results = self._store.collection.get(where={"is_active": True})
         self._ids = list(results["ids"] or [])
         self._texts = list(results["documents"] or [])
         self._metadatas = [m or {} for m in (results["metadatas"] or [])]
-        tokenized = [jieba.lcut(t) for t in self._texts]
-        self._bm25 = BM25Okapi(tokenized)
+        if self._texts:
+            tokenized = [jieba.lcut(t) for t in self._texts]
+            self._bm25 = BM25Okapi(tokenized)
+        else:
+            self._bm25 = None
+        self._index_built = True
 
     def _search(self, query: str, top_k: int, doc_type_filter: Optional[str] = None) -> list:
-        if self._bm25 is None:
+        if not self._index_built:
             self.build_index()  # 惰性构建
+        if not self._texts:
+            # 无 active chunks → 与 vector 侧空库行为对齐：返回空结果，不抛异常
+            return []
         tokens = jieba.lcut(query)
         scores = self._bm25.get_scores(tokens)
         allowed = None
