@@ -1,3 +1,7 @@
+import hashlib
+import os
+import re
+
 import fitz  # PyMuPDF
 from core.config import ConfigRegistry
 from core.bilingual import BilingualHandler
@@ -18,13 +22,15 @@ class OCRPipeline:
         all_text, pages_data, tables_data = [], [], []
         need_ocr = ConfigRegistry.get("ocr.engine", "paddleocr")
         clean_cfg = ConfigRegistry.get("ocr.clean", {})
+        # I-3 终审：OCR 临时图目录按文档区分（hash 前 8 位），并发 ingest 互不覆盖
+        doc_tag = hashlib.md5(file_path.encode("utf-8")).hexdigest()[:8]
 
         for page_num, page in enumerate(doc):
             text = page.get_text("text")
             text_ratio = len(text.strip()) / max(page.rect.width * page.rect.height, 1)
 
             if text_ratio < 0.01 and need_ocr:
-                text = self._ocr_page(page, page_num)
+                text = self._ocr_page(page, page_num, doc_tag)
             else:
                 text = self._extract_native(page)
 
@@ -48,23 +54,62 @@ class OCRPipeline:
         blocks.sort(key=lambda b: (b[1], b[0]))
         return "\n".join(b[4] for b in blocks if b[4].strip())
 
-    def _ocr_page(self, page, page_num: int) -> str:
-        from paddleocr import PaddleOCR
+    def _ocr_page(self, page, page_num: int, doc_tag: str) -> str:
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError as exc:
+            raise RuntimeError(
+                "PaddleOCR 未安装或版本不兼容（扫描件 OCR 不可用），"
+                "请按 README 安装：pip install paddlepaddle paddleocr（macOS ARM "
+                "如安装失败可尝试 paddlepaddle 2.x 组合）") from exc
         dpi = ConfigRegistry.get("ocr.dpi", 300)
         pix = page.get_pixmap(dpi=dpi)
-        img_path = f"data/ocr/page_{page_num}.png"
+        # I-3 终审：临时图路径按文档 hash 隔离（可追溯），用后 finally 清理
+        ocr_cache = ConfigRegistry.get("paths.ocr_cache", "data/ocr")
+        img_dir = os.path.join(ocr_cache, doc_tag)
+        os.makedirs(img_dir, exist_ok=True)
+        img_path = os.path.join(img_dir, f"page_{page_num}.png")
         pix.save(img_path)
-        ocr = PaddleOCR(lang=ConfigRegistry.get("ocr.language", ["ch", "en"]), use_angle_cls=True)
-        result = ocr.ocr(img_path, cls=True)
-        if result and result[0]:
-            return "\n".join(line[1][0] for line in result[0])
-        return ""
+        try:
+            # I-3 终审：paddleocr 2.x/3.x 单模型单语言 — lang 必须是 str。
+            # config ocr.language 为列表 → 取第一个元素；空列表默认 "ch"（中英混排）
+            langs = ConfigRegistry.get("ocr.language", ["ch", "en"]) or []
+            lang = langs[0] if langs else "ch"
+            ocr = PaddleOCR(lang=lang, use_angle_cls=True)
+            result = ocr.ocr(img_path, cls=True)
+            if result and result[0]:
+                return "\n".join(line[1][0] for line in result[0])
+            return ""
+        finally:
+            try:
+                os.remove(img_path)
+            except OSError:
+                pass
+            try:
+                os.rmdir(img_dir)
+            except OSError:
+                pass
 
     def _remove_header_footer(self, text: str) -> str:
-        lines = text.strip().split("\n")
-        if len(lines) <= 3:
-            return text
-        return "\n".join(lines[1:-1])
+        """I-3 终审：不再盲切首尾行。
+
+        仅删除页码行（纯数字 / 第 N 页 / Page N）与完全空行；其余首尾行原样保留，
+        避免误删正文首尾内容（如段首缩进行、末段未完行）。
+        """
+        page_patterns = (
+            re.compile(r'^\s*\d+\s*$'),
+            re.compile(r'^\s*第\s*\d+\s*页'),
+            re.compile(r'^\s*Page\s*\d+', re.IGNORECASE),
+        )
+        kept = []
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if any(p.match(stripped) for p in page_patterns):
+                continue
+            kept.append(line)
+        return "\n".join(kept)
 
     def _normalize_whitespace(self, text: str) -> str:
         import re

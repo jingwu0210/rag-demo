@@ -270,11 +270,14 @@ def test_ocr_clean_fix_cn_en_spacing():
 
 
 def test_ocr_clean_remove_header_footer():
+    """I-3 终审：不再盲切首尾行 — 仅删页码行（纯数字/第N页/Page N）与空行，其余保留"""
     ocr = OCRPipeline()
-    text = "页眉公司名\n第二行正文\n第三行正文\n第4页页脚"
-    assert ocr._remove_header_footer(text) == "第二行正文\n第三行正文"
-    # 行数 ≤ 3 不处理
+    # 页眉"页眉公司名"非页码 → 保留；空行 → 删；"3"、"第4页页脚"、"Page 5" → 删
+    text = "页眉公司名\n\n第二行正文\n第三行正文\n3\n第4页页脚\nPage 5"
+    assert ocr._remove_header_footer(text) == "页眉公司名\n第二行正文\n第三行正文"
+    # 无页码/空行 → 原样保留（不再盲切首尾行）
     assert ocr._remove_header_footer("a\nb") == "a\nb"
+    assert ocr._remove_header_footer("首行内容\n正文\n末行内容") == "首行内容\n正文\n末行内容"
 
 
 def test_ocr_native_pdf_extraction(tmp_path):
