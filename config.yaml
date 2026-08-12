@@ -1,0 +1,4 @@
+retrieval:
+  mode: hybrid+rerank
+llm:
+  provider: deepseek
