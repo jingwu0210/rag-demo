@@ -1,0 +1,187 @@
+"""Evaluation — 报表生成 + before/after 对比
+
+generate_report(results, output_dir)：
+- 写 CSV（config,faithfulness,context_precision,answer_compliance,refusal_appropriateness,
+  style_consistency,p50_ms,p95_ms,avg_tokens,total_requests）
+- 写 Markdown（对比表格 + 结论段：哪个配置在哪个指标最优）
+- 返回 CSV 路径
+
+compare_runs(run_id_before, run_id_after)：
+- 从 eval_history 拉两次运行的记录（按 config_name 对齐）
+- 每指标 delta_pct = (after - before) / before * 100（before 缺失/为 0 → None）
+- 测试集 hash 不同 → ValueError("test set mismatch")
+"""
+from __future__ import annotations
+
+import asyncio
+import csv
+import os
+from typing import List, Optional
+
+from core.config import ConfigRegistry
+from core.logging_config import get_logger
+from storage.sqlite_client import get_db
+
+logger = get_logger(module="eval.report")
+
+# CSV 列（brief 精确指定）
+CSV_COLUMNS = ["config", "faithfulness", "context_precision", "answer_compliance",
+               "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
+               "avg_tokens", "total_requests"]
+
+# CSV 列 → results dict 键（run_comparison 聚合结果）
+_COLUMN_KEY = {
+    "config": "config_name",
+    "faithfulness": "faithfulness",
+    "context_precision": "context_precision",
+    "answer_compliance": "answer_compliance",
+    "refusal_appropriateness": "refusal_appropriateness",
+    "style_consistency": "style_consistency",
+    "p50_ms": "p50_latency_ms",
+    "p95_ms": "p95_latency_ms",
+    "avg_tokens": "avg_tokens_per_call",
+    "total_requests": "total_requests",
+}
+
+# compare_runs 对比的指标列（eval_history 列名）
+_COMPARED_METRICS = ["faithfulness", "context_precision", "answer_compliance",
+                     "refusal_appropriateness", "style_consistency",
+                     "p50_latency_ms", "p95_latency_ms", "avg_tokens_per_call"]
+
+# 指标方向：higher = 越大越好，lower = 越小越好（用于结论段选最优配置）
+_METRIC_DIRECTION = {
+    "faithfulness": "higher", "context_precision": "higher",
+    "answer_compliance": "higher", "refusal_appropriateness": "higher",
+    "style_consistency": "higher",
+    "p50_latency_ms": "lower", "p95_latency_ms": "lower",
+    "avg_tokens_per_call": "lower",
+}
+
+_METRIC_LABEL = {
+    "faithfulness": "Faithfulness", "context_precision": "Context Precision",
+    "answer_compliance": "Answer Compliance", "refusal_appropriateness": "Refusal Appropriateness",
+    "style_consistency": "Style Consistency",
+    "p50_latency_ms": "P50 Latency (ms)", "p95_latency_ms": "P95 Latency (ms)",
+    "avg_tokens_per_call": "Avg Tokens/Call",
+}
+
+
+def generate_report(results: List[dict], output_dir: str) -> str:
+    """写 CSV + Markdown 报告到 output_dir，返回 CSV 路径。"""
+    os.makedirs(output_dir, exist_ok=True)
+    csv_path = os.path.join(output_dir, "eval_report.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(CSV_COLUMNS)
+        for r in results:
+            writer.writerow([r.get(_COLUMN_KEY[col], "") for col in CSV_COLUMNS])
+
+    md_path = os.path.join(output_dir, "eval_report.md")
+    _write_markdown(results, md_path)
+
+    logger.info("eval_report_written", csv_path=csv_path, md_path=md_path,
+                configs=len(results))
+    return csv_path
+
+
+def _write_markdown(results: List[dict], md_path: str) -> None:
+    lines = ["# RAG Evaluation Report", "",
+             "> 说明：faithfulness / context_precision 为 Ragas LLM judge 指标，",
+             "> 无 LLM judge 可用（无 DEEPSEEK_API_KEY 或网络不可达）时为 None，报告按近似看待；",
+             "> answer_compliance 为规则近似值（answer 非空 且 未拒答 且 命中缓存或检索到 sources）。",
+             "",
+             "| Config | Faithfulness | Context Precision | Answer Compliance | "
+             "Refusal Appropriateness | Style Consistency | P50 (ms) | P95 (ms) | Avg Tokens | Requests |",
+             "|--------|-------------|-------------------|-------------------|----------------------|"
+             "------------------|----------|----------|------------|----------|"]
+    for r in results:
+        cfg = r.get("config_name", "")
+        cells = [cfg]
+        for col in ["faithfulness", "context_precision", "answer_compliance",
+                    "refusal_appropriateness", "style_consistency",
+                    "p50_latency_ms", "p95_latency_ms", "avg_tokens_per_call",
+                    "total_requests"]:
+            val = r.get(col)
+            cells.append("—" if val is None else f"{val:g}" if isinstance(val, float) else str(val))
+        lines.append("| " + " | ".join(cells) + " |")
+
+    lines.append("")
+    lines.append("## 结论")
+    best_lines = []
+    for col in _COMPARED_METRICS:
+        best = _best_config(results, col)
+        if best:
+            cfg, val = best
+            direction = "最高" if _METRIC_DIRECTION[col] == "higher" else "最低"
+            best_lines.append("- {label} 最优：**{cfg}**（{val:g}，{direction}）".format(
+                label=_METRIC_LABEL[col], cfg=cfg, val=val, direction=direction))
+    if best_lines:
+        lines.extend(best_lines)
+    else:
+        lines.append("- 所有指标均无可用数据（Ragas 不可用且无规则指标？请检查评估日志）。")
+
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _best_config(results: List[dict], metric: str):
+    """返回 (config_name, value) 指标最优配置；无数据 → None。"""
+    candidates = [(r.get("config_name"), r.get(metric)) for r in results
+                  if r.get(metric) is not None]
+    if not candidates:
+        return None
+    higher = _METRIC_DIRECTION.get(metric, "higher") == "higher"
+    return max(candidates, key=lambda kv: kv[1]) if higher \
+        else min(candidates, key=lambda kv: kv[1])
+
+
+# ── before/after 对比 ──────────────────────────────────────
+
+def compare_runs(run_id_before: str, run_id_after: str) -> dict:
+    """按 config_name 对齐两次运行，计算每指标 delta_pct。
+
+    返回 {config_name: {metric: {"before", "after", "delta_pct"}}, ...}。
+    测试集 hash 不一致 → ValueError("test set mismatch")。
+    """
+    rows_before = asyncio.run(_fetch_history(run_id_before))
+    rows_after = asyncio.run(_fetch_history(run_id_after))
+    if not rows_before:
+        raise ValueError(f"eval_history 无 run_id={run_id_before!r} 的记录")
+    if not rows_after:
+        raise ValueError(f"eval_history 无 run_id={run_id_after!r} 的记录")
+
+    hash_before = {r["config_name"]: r["test_set_hash"] for r in rows_before}
+    hash_after = {r["config_name"]: r["test_set_hash"] for r in rows_after}
+    for cfg in sorted(set(hash_before) & set(hash_after)):
+        if hash_before[cfg] != hash_after[cfg]:
+            raise ValueError("test set mismatch")
+
+    by_cfg_before = {r["config_name"]: r for r in rows_before}
+    by_cfg_after = {r["config_name"]: r for r in rows_after}
+    result = {}
+    for cfg in sorted(set(by_cfg_before) & set(by_cfg_after)):
+        rb, ra = by_cfg_before[cfg], by_cfg_after[cfg]
+        result[cfg] = {}
+        for col in _COMPARED_METRICS:
+            before, after = rb[col], ra[col]
+            delta = None
+            if before is not None and after is not None and before != 0:
+                delta = round((after - before) / before * 100, 2)
+            result[cfg][col] = {"before": before, "after": after, "delta_pct": delta}
+    return result
+
+
+async def _fetch_history(run_id: str) -> List[dict]:
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT run_id, config_name, test_set_hash, total_qa_pairs, "
+            "faithfulness, context_precision, context_recall, answer_relevancy, "
+            "answer_compliance, style_consistency, refusal_appropriateness, "
+            "p50_latency_ms, p95_latency_ms, avg_tokens_per_call, "
+            "total_pii_redactions, total_injections_blocked "
+            "FROM eval_history WHERE run_id = ? ORDER BY config_name", (run_id,))
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
