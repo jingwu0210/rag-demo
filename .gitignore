@@ -1,0 +1,20 @@
+# Word 临时锁文件
+~$*.docx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 运行数据
+data/corpus/*
+data/chroma/*
+data/ocr/*
+data/logs/*
+data/eval/results/*
+data/cache.db
+
+# 环境
+.env
+.DS_Store
