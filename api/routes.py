@@ -2,18 +2,24 @@
 
 - /chat：请求级并发控制（guard.acquire → 429 + Retry-After）+ 硬超时（with_request_timeout → partial）
 - /ingest：同步冷路径（OCR/embedding）用 run_in_threadpool 移出事件循环
-- /eval/run /eval/result /report：Task 9 接入前返回 501 stub
+- /eval/run /eval/result /report：评估触发/结果查询/运营报表（I-2 终审接线，原 501 stub）
 - /health：组件探测 + 并发占用
 
 依赖注入：服务实例一律经 request.app.state 访问（测试可整体替换），无模块级全局。
 """
 from __future__ import annotations
 
+import asyncio
+import csv
+import io
 import os
+import time
 import uuid
+from typing import List, Optional
 
+import numpy as np
 import structlog
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -149,21 +155,125 @@ async def ingest(request: Request,
     )
 
 
-# ── 3-5. Task 9 占位 stub ───────────────────────────────────
+# ── 3-5. 评估触发 / 结果查询 / 运营报表（I-2 终审接线）──────
+
+# 后台评估任务句柄（防 GC 回收导致任务中断）；完成即移除
+_PENDING_EVAL_TASKS: set = set()
+
+
+def _run_eval_job(chat_service, run_id: str) -> None:
+    """后台线程执行三配置评估。
+
+    注意：run_comparison 内部用 asyncio.run 驱动 chat_service.process — 不能跑在
+    事件循环线程（嵌套 asyncio.run 会 RuntimeError），经 asyncio.to_thread 移出
+    事件循环是必需的（与 /ingest 的 run_in_threadpool 同理）。任何失败只记日志，
+    结果仍可从 GET /eval/result 查询（已有部分写入 eval_history 的记录照常返回）。
+    """
+    try:
+        from eval.runner import run_comparison
+        from eval.test_set import load_test_set
+        test_set = load_test_set(ConfigRegistry.get("eval.test_set_path"))
+        run_comparison(chat_service, test_set, run_id=run_id)
+        logger.info("eval_run_finished", run_id=run_id)
+    except Exception as exc:
+        logger.error("eval_run_failed", run_id=run_id, error=str(exc), exc_info=True)
+
 
 @router.post("/eval/run")
-async def eval_run():
-    raise HTTPException(status_code=501, detail="Task 9 接入 EvalService 后开放")
+async def eval_run(request: Request):
+    """触发评估：生成 run_id → 后台线程执行三配置评估 → 立即返回 202 {run_id}"""
+    chat_service = getattr(request.app.state, "chat_service", None)
+    if chat_service is None:
+        raise HTTPException(status_code=503, detail="服务未就绪：chat_service 未初始化")
+    run_id = "eval_{}_{}".format(time.strftime("%Y%m%d_%H%M%S"), uuid.uuid4().hex[:8])
+    task = asyncio.create_task(asyncio.to_thread(_run_eval_job, chat_service, run_id))
+    _PENDING_EVAL_TASKS.add(task)
+    task.add_done_callback(_PENDING_EVAL_TASKS.discard)
+    logger.info("eval_run_started", run_id=run_id)
+    return JSONResponse(status_code=202, content={"run_id": run_id})
+
+
+async def _fetch_eval_history(run_id: Optional[str]) -> List[dict]:
+    """查 eval_history：指定 run_id → 该 run 全部 config 行；None → 最近一次 run。"""
+    db = await get_db()
+    try:
+        if not run_id:
+            cur = await db.execute(
+                "SELECT run_id FROM eval_history "
+                "ORDER BY timestamp DESC, rowid DESC LIMIT 1")
+            row = await cur.fetchone()
+            if row is None:
+                return []
+            run_id = row["run_id"]
+        cur = await db.execute(
+            "SELECT run_id, config_name, timestamp, test_set_hash, total_qa_pairs, "
+            "faithfulness, context_precision, context_recall, answer_relevancy, "
+            "answer_compliance, style_consistency, refusal_appropriateness, "
+            "p50_latency_ms, p95_latency_ms, avg_tokens_per_call, "
+            "total_pii_redactions, total_injections_blocked "
+            "FROM eval_history WHERE run_id = ? ORDER BY config_name", (run_id,))
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
 
 
 @router.get("/eval/result")
-async def eval_result():
-    raise HTTPException(status_code=501, detail="Task 9 接入 EvalService 后开放")
+async def eval_result(run_id: Optional[str] = None):
+    """查询评估结果：按 run_id 返回该 run 各 config 的指标 JSON；无 run_id → 最近一次"""
+    rows = await _fetch_eval_history(run_id)
+    if not rows:
+        return JSONResponse(content={"run_id": run_id or None, "results": []})
+    return JSONResponse(content={"run_id": rows[0]["run_id"], "results": rows})
+
+
+async def _fetch_request_metrics() -> List[dict]:
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT * FROM request_metrics ORDER BY id")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+def _build_report_csv(rows: List[dict]) -> str:
+    """request_metrics 聚合 → metric,value CSV。
+
+    p50/p95 用 numpy.percentile（latency_total），token 汇总、cache_hit_rate、
+    refusal_rate、pii/injection 汇总。无数据 → 仅表头。
+    """
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["metric", "value"])
+    n = len(rows)
+    if n == 0:
+        return out.getvalue()
+    latencies = [int(r["latency_total"] or 0) for r in rows]
+    token_total = sum(int(r["token_total"] or 0) for r in rows)
+    cache_hits = sum(1 for r in rows if r["cache_hit"])
+    refusals = sum(1 for r in rows if r["refused"])
+    pii_total = sum(int(r["pii_redact_count"] or 0) for r in rows)
+    inj_total = sum(int(r["injection_blocked"] or 0) for r in rows)
+    writer.writerows([
+        ("total_requests", n),
+        ("p50_latency_ms", int(np.percentile(latencies, 50))),
+        ("p95_latency_ms", int(np.percentile(latencies, 95))),
+        ("total_tokens", token_total),
+        ("avg_tokens_per_call", round(token_total / n, 2)),
+        ("cache_hit_rate", round(cache_hits / n, 4)),
+        ("refusal_rate", round(refusals / n, 4)),
+        ("pii_redactions_total", pii_total),
+        ("injections_blocked_total", inj_total),
+    ])
+    return out.getvalue()
 
 
 @router.get("/report")
 async def report():
-    raise HTTPException(status_code=501, detail="Task 9 接入 EvalService 后开放")
+    """运营报表：request_metrics 聚合 → CSV（text/csv），供下游/看板消费"""
+    rows = await _fetch_request_metrics()
+    return Response(content=_build_report_csv(rows), media_type="text/csv")
 
 
 # ── 6. /health ──────────────────────────────────────────────

@@ -321,8 +321,10 @@ def test_chat_service_full_flow(tmp_path):
     assert resp.answer == "根据《员工手册》规定，年假为 10 天。"
     assert resp.session_id
     assert resp.sources == [
-        {"chunk_id": "c1", "heading_path": "员工手册 > 第三章", "score": 0.91},
-        {"chunk_id": "c2", "heading_path": "员工手册 > 第三章", "score": 0.82},
+        {"chunk_id": "c1", "heading_path": "员工手册 > 第三章", "score": 0.91,
+         "text": "年假规定"},    # I-4：sources 携带 chunk 文本（前 500 字符）
+        {"chunk_id": "c2", "heading_path": "员工手册 > 第三章", "score": 0.82,
+         "text": "病假规定"},
     ]
     assert resp.timing_ms["retrieval"] == 12
     assert resp.timing_ms["rerank"] == 8
@@ -377,6 +379,24 @@ def test_chat_service_cache_hit(tmp_path):
     deps["retrieval"].retrieve.assert_not_awaited()
     deps["generator"].generate.assert_not_awaited()
     deps["cache"].put.assert_not_awaited()
+
+
+def test_chat_service_cache_hit_writes_metrics(tmp_path):
+    """I-2 终审：缓存命中路径也写 request_metrics（cache_hit=1），命中率才可计算"""
+    svc, deps = _chat_svc(tmp_path, cache_hit=True)
+
+    resp = asyncio.run(svc.process("年假有几天？", session_id="s1"))
+
+    assert resp.from_cache is True
+    metrics = asyncio.run(_fetch_metrics())
+    assert len(metrics) == 1
+    m = metrics[0]
+    assert m["cache_hit"] == 1
+    assert m["retrieval_mode"] == "hybrid+rerank"   # 记当前检索模式
+    assert m["token_total"] == 42                   # 缓存时记录的 token_usage
+    assert m["latency_total"] >= 0                  # 实际命中耗时
+    assert m["latency_retrieval"] == 0 and m["latency_generation"] == 0
+    assert m["refused"] == 0 and m["timeout"] == 0 and m["degraded"] == 0
 
 
 def test_chat_service_generation_timeout_partial(tmp_path):

@@ -244,6 +244,35 @@ def test_run_comparison_ragas_unavailable_yields_none(tmp_path):
     assert all(r["refusal_appropriateness"] == 1.0 for r in results)
 
 
+# ═══ 3.5 retrieved_contexts 保真（I-4 终审）══════════════
+
+def test_build_ragas_sample_prefers_source_text():
+    """I-4：retrieved_contexts 用 chunk 真实文本（chat sources 的 text 字段）而非 heading_path"""
+    from eval.runner import _build_ragas_sample
+
+    sample = _build_ragas_sample(
+        "Q", "A",
+        sources=[{"chunk_id": "c1", "heading_path": "员工手册 > 第三章",
+                  "text": "年假为 10 天", "score": 0.9}],
+        ground_truth="GT")
+    if sample is None:
+        pytest.skip("ragas 不可导入")
+    assert sample.retrieved_contexts == ["年假为 10 天"]
+
+
+def test_build_ragas_sample_falls_back_to_heading_path():
+    """I-4：无 text（旧结构/mock）→ 回退 heading_path，不中断评估"""
+    from eval.runner import _build_ragas_sample
+
+    sample = _build_ragas_sample(
+        "Q", "A",
+        sources=[{"chunk_id": "c1", "heading_path": "员工手册 > 第三章", "score": 0.9}],
+        ground_truth="GT")
+    if sample is None:
+        pytest.skip("ragas 不可导入")
+    assert sample.retrieved_contexts == ["员工手册 > 第三章"]
+
+
 # ═══ 4. 报表生成 ═══════════════════════════════════════════
 
 def test_generate_report_writes_csv_and_markdown(tmp_path):

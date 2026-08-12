@@ -110,7 +110,9 @@ def _build_ragas_sample(question: str, answer: str, sources: List[dict],
         return SingleTurnSample(
             user_input=question,
             response=answer,
-            retrieved_contexts=[s.get("heading_path") or s.get("chunk_id", "")
+            # I-4 终审：优先用 chunk 真实文本喂 judge（chat 组装 sources 时已带 text）；
+            # 旧结构（无 text 的 mock/历史数据）回退 heading_path
+            retrieved_contexts=[s.get("text") or s.get("heading_path", "")
                                 for s in sources] or None,
             reference=ground_truth or None,
         )
