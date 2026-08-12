@@ -66,12 +66,20 @@ class RerankerCircuitBreaker:
 
 
 class Reranker:
-    """Cross-Encoder 精排：逐对打分写回 doc.score，按分数降序返回 top_n（config reranker.top_n）"""
+    """Cross-Encoder 精排：逐对打分写回 doc.score，按分数降序返回 top_n（config reranker.top_n）
+
+    生产链路熔断（I-1 终审）：构造即持有 RerankerCircuitBreaker，rerank 核心逻辑经
+    breaker.call 执行 — predict 连续失败达到阈值 → 熔断打开，CircuitBreakerOpen 抛给
+    上层（RetrievalService 捕获后降级为粗排结果截断）。
+    """
 
     def __init__(self, model=None):
         # 延迟加载：model=None 时不加载模型（测试友好），首次 rerank 时按配置加载
         self.model = model
         self.top_n = ConfigRegistry.get("reranker.top_n", 5)
+        # 熔断器：默认参数从 config reranker.circuit_breaker.* 读取（3 / 60），
+        # 与 top_n 的读取时机一致（构造时 config 已 init）
+        self.breaker = RerankerCircuitBreaker()
 
     def _ensure_model(self):
         if self.model is None:
@@ -86,6 +94,10 @@ class Reranker:
     def rerank(self, query: str, candidates: List[ScoredDoc]) -> List[ScoredDoc]:
         if not candidates:
             return []
+        # 核心逻辑经熔断器执行：predict 异常累计达阈值 → OPEN，下次调用抛 CircuitBreakerOpen
+        return self.breaker.call(lambda: self._rerank_impl(query, candidates))
+
+    def _rerank_impl(self, query: str, candidates: List[ScoredDoc]) -> List[ScoredDoc]:
         model = self._ensure_model()
         pairs = [(query, doc.text) for doc in candidates]
         scores = model.predict(pairs)
