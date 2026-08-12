@@ -149,6 +149,57 @@ def test_reranker_loads_cross_encoder_from_config(monkeypatch):
     assert [d.chunk_id for d in result] == ["c0", "c1"]
 
 
+def test_reranker_holds_circuit_breaker_instance():
+    """I-1 接线：Reranker 构造即持有熔断器实例（生产链路不再无熔断）"""
+    _init_config()
+    reranker = Reranker()
+    assert isinstance(reranker.breaker, RerankerCircuitBreaker)
+    assert reranker.breaker.state == "CLOSED"
+    assert reranker.breaker.failure_threshold == 3      # 默认从 config 读取
+
+
+def test_reranker_breaker_opens_after_predict_failures():
+    """I-1 接线：predict 抛异常 3 次 → breaker OPEN → 第 4 次 rerank 抛 CircuitBreakerOpen"""
+    _init_config()
+    reranker = Reranker()
+    reranker.model = MagicMock()
+    reranker.model.predict.side_effect = RuntimeError("predict boom")
+    candidates = _docs(["c0", "c1"], ["A", "B"])
+
+    for _ in range(3):   # 3 次失败 → 达到 failure_threshold → OPEN
+        with pytest.raises(RuntimeError):
+            reranker.rerank("query", candidates)
+    assert reranker.breaker.state == "OPEN"
+
+    with pytest.raises(CircuitBreakerOpen):   # 第 4 次：熔断打开，不执行 predict
+        reranker.rerank("query", candidates)
+    assert reranker.breaker.state == "OPEN"
+    assert reranker.model.predict.call_count == 3   # 熔断后未再触达模型
+
+
+def test_reranker_breaker_recovers_after_recovery_timeout():
+    """I-1 接线：HALF_OPEN 试探成功 → 回 CLOSED，rerank 恢复正常"""
+    _init_config()
+    reranker = Reranker()
+    reranker.breaker = RerankerCircuitBreaker(failure_threshold=1, recovery_timeout=0.01)
+    reranker.model = MagicMock()
+    reranker.model.predict.side_effect = RuntimeError("predict boom")
+    candidates = _docs(["c0", "c1"], ["A", "B"])
+
+    with pytest.raises(RuntimeError):
+        reranker.rerank("query", candidates)
+    assert reranker.breaker.state == "OPEN"
+
+    time.sleep(0.02)   # 过 recovery_timeout → 下次调用进入 HALF_OPEN 试探
+    reranker.model.predict.side_effect = None
+    reranker.model.predict.return_value = np.array([[0.9], [0.3]])
+    result = reranker.rerank("query", candidates)
+
+    assert reranker.breaker.state == "CLOSED"      # 试探成功 → 恢复正常
+    assert reranker.breaker.failure_count == 0
+    assert [d.chunk_id for d in result] == ["c0", "c1"]
+
+
 # ── 3. InjectionScanner ───────────────────────────────────────
 
 def test_scanner_blocks_injection_chunk():
