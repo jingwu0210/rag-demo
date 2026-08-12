@@ -279,3 +279,61 @@ async def _save_eval_history(agg: dict) -> None:
         await db.commit()
     finally:
         await db.close()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    """CLI 入口：python -m eval.runner --output <dir>
+
+    加载测试集 → 构建服务栈（与 api/app.py startup 同构）→ run_comparison
+    → generate_report（CSV + Markdown 写至 --output）。失败直接抛错退出。
+    """
+    import argparse
+
+    from core.config import ConfigRegistry
+    from core.logging_config import setup_logging
+    from eval.report import generate_report
+    from eval.test_set import load_test_set
+    from storage.sqlite_client import init_db
+
+    parser = argparse.ArgumentParser(description="RAG 三配置对比评估（CLI）")
+    parser.add_argument("--output", default="data/eval/results/",
+                        help="报表输出目录（写入 eval_report.csv / eval_report.md），"
+                             "默认 data/eval/results/")
+    parser.add_argument("--test-set", default=None,
+                        help="测试集 JSON 路径，默认取 config eval.test_set_path")
+    args = parser.parse_args()
+
+    if ConfigRegistry._instance is None:
+        ConfigRegistry.init("config.yaml")
+    setup_logging()
+    asyncio.run(init_db())
+
+    from core.cache import CacheManager
+    from core.compressor import ConversationCompressor
+    from core.embedder import Embedder
+    from core.generator import Generator
+    from core.guard import ResilienceGuard
+    from core.postprocess import PostProcessor
+    from core.reranker import Reranker
+    from core.retriever import Retriever
+    from core.scanner import InjectionScanner
+    from services.chat import ChatService
+    from services.retrieval import RetrievalService
+    from storage.chroma_client import ChromaStore
+
+    chroma_store = ChromaStore()
+    embedder = Embedder()          # BGE-M3 下载/加载失败 → 抛错（CLI 评估不降级）
+    guard = ResilienceGuard()
+    retriever = Retriever(chroma_store, embedder)
+    retrieval_service = RetrievalService(
+        retriever=retriever, reranker=Reranker(), scanner=InjectionScanner(),
+        guard=guard)
+    chat_service = ChatService(
+        retrieval=retrieval_service, generator=Generator(),
+        postprocessor=PostProcessor(), cache=CacheManager(),
+        guard=guard, compressor=ConversationCompressor())
+
+    test_set = load_test_set(args.test_set)
+    results = run_comparison(chat_service, test_set)
+    csv_path = generate_report(results, args.output)
+    print(f"评估完成: {csv_path}")
