@@ -100,6 +100,25 @@ def _ensure_ragas_llm() -> bool:
         return False
 
 
+def _build_ragas_sample(question: str, answer: str, sources: List[dict],
+                        ground_truth: str):
+    """构造 Ragas SingleTurnSample；Ragas 不可导入/构造失败 → None（记日志，不中断评估）。"""
+    if SingleTurnSample is None:
+        logger.info("ragas_skipped", reason="ragas 不可导入")
+        return None
+    try:
+        return SingleTurnSample(
+            user_input=question,
+            response=answer,
+            retrieved_contexts=[s.get("heading_path") or s.get("chunk_id", "")
+                                for s in sources] or None,
+            reference=ground_truth or None,
+        )
+    except Exception as exc:
+        logger.warning("ragas_sample_failed", error=str(exc))
+        return None
+
+
 def _try_ragas_score(sample, metric, metric_name: str) -> Optional[float]:
     """尽力调用 Ragas single_turn_ascore；任何失败 → None（不中断评估）。"""
     try:
@@ -166,16 +185,14 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             refusal_reason = resp.refusal_reason
 
             # ── LLM judge 指标（Ragas；不可用 → None）──
-            sample = SingleTurnSample(
-                user_input=question,
-                response=answer,
-                retrieved_contexts=[s.get("heading_path") or s.get("chunk_id", "")
-                                    for s in sources] or None,
-                reference=ground_truth or None,
-            )
-            faithfulness = _try_ragas_score(sample, _ragas_faithfulness, "faithfulness")
-            context_precision = _try_ragas_score(
-                sample, _ragas_context_precision, "context_precision")
+            sample = _build_ragas_sample(question, answer, sources, ground_truth)
+            faithfulness = None
+            context_precision = None
+            if sample is not None:
+                faithfulness = _try_ragas_score(
+                    sample, _ragas_faithfulness, "faithfulness")
+                context_precision = _try_ragas_score(
+                    sample, _ragas_context_precision, "context_precision")
 
             # ── 规则近似指标（无 LLM judge 时的降级定义）──
             answer_compliance = 1 if (

@@ -8,7 +8,7 @@ import asyncio
 import csv
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from core.config import ConfigRegistry
 from eval.report import compare_runs, generate_report
@@ -165,6 +165,69 @@ def test_run_comparison_executes_three_configs(tmp_path):
     assert len(per_qa) == 5
     oos = [p for p in per_qa if p["is_out_of_scope"]]
     assert len(oos) == 1 and oos[0]["refused"] is True and oos[0]["answer_compliance"] == 0
+
+
+def test_apply_config_mode_switches_retriever_dispatch():
+    """C-1 回归：已构造的 Retriever 门面在 apply_config_mode 切换后分发到不同子检索器。
+
+    用真实 Retriever 门面 + mock 子检索器：override mode 不重建门面也能切换实现，
+    且切回同一 mode 复用缓存的子检索器（不重复构造）。
+    """
+    from core.retriever import Retriever
+
+    ConfigRegistry.init("config.yaml")
+    with patch("core.retriever.VectorRetriever") as mock_vec, \
+            patch("core.retriever.HybridRetriever") as mock_hybrid:
+        retriever = Retriever(chroma_store=MagicMock(), embedder=MagicMock())
+
+        # 初始 hybrid → 分发到 HybridRetriever
+        apply_config_mode("hybrid")
+        retriever.retrieve("q1", top_k=2)
+        assert mock_hybrid.call_count == 1
+        assert mock_hybrid.return_value.retrieve.call_count == 1
+        assert mock_vec.call_count == 0
+
+        # 切到 vector-only → 同一门面实例分发到 VectorRetriever
+        apply_config_mode("vector-only")
+        retriever.retrieve("q2", top_k=2)
+        assert mock_vec.call_count == 1
+        assert mock_vec.return_value.retrieve.call_count == 1
+        assert mock_hybrid.return_value.retrieve.call_count == 1  # hybrid 不再被调用
+
+        # 切回 hybrid → 复用缓存的 HybridRetriever（不重复构造）
+        apply_config_mode("hybrid")
+        retriever.retrieve("q3", top_k=2)
+        assert mock_hybrid.call_count == 1
+        assert mock_hybrid.return_value.retrieve.call_count == 2
+
+        # hybrid+rerank 粗排侧与 hybrid 共用 HybridRetriever
+        apply_config_mode("hybrid+rerank")
+        retriever.retrieve("q4", top_k=2)
+        assert mock_hybrid.call_count == 1
+        assert mock_hybrid.return_value.retrieve.call_count == 3
+
+
+def test_run_comparison_ragas_import_failure_does_not_abort(tmp_path, monkeypatch):
+    """I-1 回归：Ragas 不可导入（SingleTurnSample=None）→ 评估不中断，规则指标照常。"""
+    import eval.runner as eval_runner
+
+    _init_sqlite(tmp_path)
+    monkeypatch.setattr(eval_runner, "SingleTurnSample", None)
+    monkeypatch.setattr(eval_runner, "_RAGAS_IMPORTED", False)
+    monkeypatch.setattr(eval_runner, "_RAGAS_LLM_READY", False)
+
+    service = FakeChatService()
+    results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas_import")
+
+    assert len(results) == 3
+    for r in results:
+        assert r["faithfulness"] is None
+        assert r["context_precision"] is None
+        # 规则近似指标照常
+        assert r["answer_compliance"] == 0.8
+        assert r["refusal_appropriateness"] == 1.0
+    rows = asyncio.run(_fetch_eval_rows("run_no_ragas_import"))
+    assert len(rows) == 3
 
 
 def test_run_comparison_ragas_unavailable_yields_none(tmp_path):

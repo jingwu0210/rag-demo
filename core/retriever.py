@@ -196,22 +196,34 @@ class HybridRetriever(BaseRetriever):
 
 
 class Retriever:
-    """策略分发门面 — 按 config.retrieval.mode 选择实现，后续 Service 只依赖这个类"""
+    """策略分发门面 — 按 config.retrieval.mode 选择实现，后续 Service 只依赖这个类
+
+    mode 在每次 retrieve 时动态读取（不缓存）：改配置 = 改行为，已构造实例可即时切换
+    （eval 三配置对比依赖此语义）。子检索器按 mode 懒加载并缓存，切回同一 mode 不重复构造。
+    """
 
     def __init__(self, chroma_store: ChromaStore, embedder: Embedder):
-        self._mode = ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
-        if self._mode == "vector-only":
-            self._impl = VectorRetriever(chroma_store, embedder)
-        elif self._mode in ("hybrid", "hybrid+rerank"):
-            # rerank 由 RetrievalService 在下一层做，Retriever 只负责粗排
-            self._impl = HybridRetriever(chroma_store, embedder)
-        else:
-            raise ValueError(f"unknown retrieval.mode: {self._mode}")
+        self._chroma_store = chroma_store
+        self._embedder = embedder
+        self._impls: Dict[str, BaseRetriever] = {}
+
+    def _get_impl(self, mode: str) -> BaseRetriever:
+        # hybrid 与 hybrid+rerank 的粗排实现相同（rerank 由 RetrievalService 在下一层做）→ 共享实例
+        impl_key = "hybrid" if mode in ("hybrid", "hybrid+rerank") else mode
+        if impl_key not in self._impls:
+            if mode == "vector-only":
+                self._impls[impl_key] = VectorRetriever(self._chroma_store, self._embedder)
+            elif mode in ("hybrid", "hybrid+rerank"):
+                self._impls[impl_key] = HybridRetriever(self._chroma_store, self._embedder)
+            else:
+                raise ValueError(f"unknown retrieval.mode: {mode}")
+        return self._impls[impl_key]
 
     def retrieve(self, query: str, top_k: int = 20,
                  doc_type_filter: Optional[str] = None) -> RetrievalResult:
         start = time.perf_counter()
-        result = self._impl.retrieve(query, top_k, doc_type_filter)
+        mode = ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
+        result = self._get_impl(mode).retrieve(query, top_k, doc_type_filter)
         result.timing_ms = int((time.perf_counter() - start) * 1000)
-        result.mode = self._mode  # 门面兜底：结果 mode 与配置一致（如 hybrid+rerank）
+        result.mode = mode  # 门面兜底：结果 mode 与当前配置一致（如 hybrid+rerank）
         return result
