@@ -59,11 +59,14 @@ class ChatService:
         cache_enabled = bool(ConfigRegistry.get("cache.l1.enabled", True))
         mode = ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
 
-        # 1. 缓存（cache.l1.enabled 时）：命中直接返回，不建会话不检索
+        # 1. 缓存（cache.l1.enabled 时）：命中直接返回，不建会话不检索；
+        #    命中路径同样写 request_metrics（cache_hit=1），缓存命中率才可计算（I-2 终审）
         if cache_enabled:
+            cache_start = time.perf_counter()
             cached = await self.cache.get(query, mode)
             if cached is not None:
-                return self._from_cache(cached, session_id)
+                cache_ms = int((time.perf_counter() - cache_start) * 1000)
+                return await self._from_cache(cached, session_id, mode, cache_ms)
 
         # 2. 会话：新会话 INSERT，既有会话刷新 last_active
         if session_id is None:
@@ -127,7 +130,10 @@ class ChatService:
         sources = [
             {"chunk_id": d.chunk_id,
              "heading_path": (d.metadata or {}).get("heading_path", ""),
-             "score": d.score}
+             "score": d.score,
+             # I-4 终审：携带 chunk 文本（截断前 500 字符防 sources 过大），
+             # 供 eval/runner 以真实文本喂 Ragas judge（heading_path 保真度不足）
+             "text": d.text[:500]}
             for d in docs
         ]
         timing = {
@@ -167,13 +173,24 @@ class ChatService:
 
     # ── 私有方法（SQLite 持久化）──────────────────────────
 
-    def _from_cache(self, cached: CachedAnswer, session_id: Optional[str]) -> ChatResponse:
+    async def _from_cache(self, cached: CachedAnswer, session_id: Optional[str],
+                          retrieval_mode: str, latency_total_ms: int) -> ChatResponse:
+        """缓存命中：组装响应并写 request_metrics（cache_hit=1，token 用缓存时记录值）"""
+        request_id = uuid.uuid4().hex
+        timing = {"retrieval": 0, "rerank": 0, "generation": 0, "total": latency_total_ms}
+        tokens = {"prompt": 0, "completion": 0, "total": cached.token_usage}
+        await self._save_metrics(
+            request_id=request_id, session_id=session_id or "",
+            timing_ms=timing, token_usage=tokens, retrieval_mode=retrieval_mode,
+            cache_hit=True, refused=False, refusal_reason=None,
+            timeout=False, degraded=False, pii_redact_count=0, injection_blocked=0,
+        )
         return ChatResponse(
             answer=cached.answer,
             session_id=session_id,
             sources=list(cached.sources),
-            timing_ms={"retrieval": 0, "rerank": 0, "generation": 0, "total": 0},
-            token_usage={"prompt": 0, "completion": 0, "total": cached.token_usage},
+            timing_ms=timing,
+            token_usage=tokens,
             from_cache=True,
         )
 

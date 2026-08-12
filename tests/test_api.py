@@ -17,6 +17,7 @@ from core.config import ConfigRegistry
 from core.guard import ConcurrencyLimitExceeded, ResilienceGuard
 from core.versioned import IngestResult
 from services.chat import ChatResponse
+from storage.sqlite_client import get_db, init_db
 
 
 @pytest.fixture(autouse=True)
@@ -248,11 +249,134 @@ def test_health_degraded_on_component_failure():
     assert body["concurrency"] == {"active": 0, "max": 10}
 
 
-# ═══ 4. Task 9 占位 stub ═══════════════════════════════════
+# ═══ 4. 评估触发 / 结果查询 / 运营报表（I-2 终审接线）═══════
 
-def test_eval_and_report_stubs():
-    """Task 9 接入前：/eval/run /eval/result /report 全部 501"""
-    client = TestClient(app)
-    assert client.post("/eval/run").status_code == 501
-    assert client.get("/eval/result").status_code == 501
-    assert client.get("/report").status_code == 501
+async def _insert_metrics_rows():
+    """插入 3 行 request_metrics：2 次缓存命中 + 1 次拒答，latency 100/200/300"""
+    db = await get_db()
+    try:
+        for i, (lat, cache_hit, refused) in enumerate(
+                [(100, 1, 0), (200, 1, 0), (300, 0, 1)]):
+            await db.execute(
+                "INSERT INTO request_metrics (request_id, session_id, latency_total, "
+                "token_total, retrieval_mode, cache_hit, refused, pii_redact_count, "
+                "injection_blocked) VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"req-{i}", "s1", lat, 30, "hybrid+rerank",
+                 cache_hit, refused, 1, 2))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _insert_eval_rows(run_id: str, faithfulness: float = 0.7):
+    """插入 3 行 eval_history（三配置各一条）"""
+    db = await get_db()
+    try:
+        for cfg in ["vector-only", "hybrid", "hybrid+rerank"]:
+            await db.execute(
+                "INSERT INTO eval_history (run_id, config_name, test_set_hash, "
+                "total_qa_pairs, faithfulness, context_precision, answer_compliance, "
+                "refusal_appropriateness, p50_latency_ms, p95_latency_ms, "
+                "avg_tokens_per_call) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, cfg, "hash1", 5, faithfulness, 0.8, 0.9, 1.0, 100, 150, 300))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+def test_report_csv_with_metrics():
+    """GET /report：request_metrics 聚合 → 200 + text/csv + 表头与数据行"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_metrics_rows())
+
+    r = TestClient(app).get("/report")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    body = r.text
+    lines = [ln.strip() for ln in body.strip().splitlines() if ln.strip()]
+    assert lines[0] == "metric,value"
+    metrics = dict(ln.split(",") for ln in lines[1:])
+    assert metrics["total_requests"] == "3"
+    assert metrics["p50_latency_ms"] == "200"       # numpy.percentile(50)
+    assert metrics["p95_latency_ms"] == "290"       # numpy.percentile(95)
+    assert metrics["total_tokens"] == "90"
+    assert metrics["avg_tokens_per_call"] == "30.0"
+    assert metrics["cache_hit_rate"] == "0.6667"    # 2/3
+    assert metrics["refusal_rate"] == "0.3333"      # 1/3
+    assert metrics["pii_redactions_total"] == "3"
+    assert metrics["injections_blocked_total"] == "6"
+
+
+def test_report_csv_empty_table():
+    """GET /report 无数据 → 200 + 仅表头 CSV"""
+    asyncio.run(init_db())
+
+    r = TestClient(app).get("/report")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert r.text.strip() == "metric,value"
+
+
+def test_eval_run_returns_202_with_run_id():
+    """POST /eval/run → 202 + {run_id}；后台任务经 to_thread 启动（mock 为 no-op）"""
+    svc = MagicMock()
+    app.state.chat_service = svc
+
+    with patch("api.routes._run_eval_job") as job:
+        r = TestClient(app).post("/eval/run")
+
+    assert r.status_code == 202
+    body = r.json()
+    assert body["run_id"].startswith("eval_")
+    assert len(body["run_id"]) > len("eval_")
+    # 后台任务确实被触发（to_thread 包裹，不跑在事件循环线程）
+    job.assert_called_once()
+    assert job.call_args[0][0] is svc
+    assert job.call_args[0][1] == body["run_id"]
+
+
+def test_eval_result_by_run_id():
+    """GET /eval/result?run_id= → 200 + 该 run 各 config 指标 JSON"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_eval_rows("run_xyz"))
+
+    r = TestClient(app).get("/eval/result", params={"run_id": "run_xyz"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["run_id"] == "run_xyz"
+    assert len(body["results"]) == 3
+    cfgs = {res["config_name"] for res in body["results"]}
+    assert cfgs == {"vector-only", "hybrid", "hybrid+rerank"}
+    hybrid = [res for res in body["results"] if res["config_name"] == "hybrid"][0]
+    assert hybrid["faithfulness"] == 0.7
+    assert hybrid["p50_latency_ms"] == 100
+    assert hybrid["total_qa_pairs"] == 5
+
+
+def test_eval_result_latest_run_when_no_run_id():
+    """GET /eval/result 无 run_id → 返回最近一次 run"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_eval_rows("run_old", faithfulness=0.5))
+    asyncio.run(_insert_eval_rows("run_new", faithfulness=0.9))
+
+    r = TestClient(app).get("/eval/result")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["run_id"] == "run_new"     # timestamp 相同 → rowid 更大的为最近
+    assert all(res["faithfulness"] == 0.9 for res in body["results"])
+
+
+def test_eval_result_empty_when_no_history():
+    """无 eval_history 记录 → 200 + 空 results"""
+    asyncio.run(init_db())
+
+    r = TestClient(app).get("/eval/result")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["run_id"] is None
+    assert body["results"] == []
