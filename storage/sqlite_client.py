@@ -68,14 +68,15 @@ async def init_db() -> None:
 
     await db.execute("""
         CREATE TABLE IF NOT EXISTS eval_history (
-            run_id TEXT PRIMARY KEY, config_name TEXT NOT NULL,
+            run_id TEXT NOT NULL, config_name TEXT NOT NULL,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, test_set_hash TEXT NOT NULL,
             total_qa_pairs INTEGER,
             faithfulness REAL, context_precision REAL, context_recall REAL, answer_relevancy REAL,
             answer_compliance REAL, style_consistency REAL, refusal_appropriateness REAL,
             p50_latency_ms INTEGER, p95_latency_ms INTEGER, avg_tokens_per_call INTEGER,
             total_pii_redactions INTEGER DEFAULT 0, total_injections_blocked INTEGER DEFAULT 0,
-            per_qa_results_json TEXT
+            per_qa_results_json TEXT,
+            PRIMARY KEY (run_id, config_name)
         )
     """)
     await db.execute("CREATE INDEX IF NOT EXISTS idx_eval_history_ts ON eval_history(timestamp)")
