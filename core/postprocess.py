@@ -1,0 +1,121 @@
+"""生成后处理：PII 脱敏（PIIScrubber）+ 拒答检查（RefusalCheck）+ 编排（PostProcessor）
+
+- PIIScrubber: 正则从 config pii.patterns 动态加载，无 config 时用内置默认
+- RefusalCheck: 三规则（低置信度 / 超出知识库范围 / 安全敏感），retrieval_result
+  兼容 RetrievalResult 与任何有 .docs 属性的对象
+- PostProcessor: 先拒答检查，拒答返回模板话术；否则脱敏后返回
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
+from core.config import ConfigRegistry
+
+
+@dataclass
+class PostProcessResult:
+    answer: str
+    refused: bool = False
+    refusal_reason: Optional[str] = None     # "low_confidence" | "out_of_scope" | "safety"
+    pii_redact_count: int = 0
+
+
+class PIIScrubber:
+    """PII 脱敏器：config pii.patterns（name/regex/replacement）→ re.subn 计数"""
+
+    # 内置默认（config pii.patterns 缺失时兜底），与设计文档 §4.6 一致
+    DEFAULT_PATTERNS: List[Tuple[str, str, str]] = [
+        ("china_id", r"[1-9]\d{5}(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]",
+         "***[REDACTED_ID]***"),
+        ("mobile", r"1[3-9]\d{9}",
+         "***[REDACTED_PHONE]***"),
+        ("email", r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+         "***[REDACTED_EMAIL]***"),
+        ("ip_address", r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}",
+         "***[REDACTED_IP]***"),
+    ]
+
+    def __init__(self):
+        patterns_cfg = ConfigRegistry.get("pii.patterns")
+        if patterns_cfg:
+            self.PATTERNS = [
+                (p["name"], re.compile(p["regex"]), p["replacement"])
+                for p in patterns_cfg
+            ]
+        else:
+            self.PATTERNS = [
+                (name, re.compile(pattern), replacement)
+                for name, pattern, replacement in self.DEFAULT_PATTERNS
+            ]
+
+    def redact(self, text: str) -> Tuple[str, int]:
+        """脱敏 + 返回触发次数（用于写入 request_metrics.pii_redact_count）"""
+        count = 0
+        for _name, pattern, replacement in self.PATTERNS:
+            text, n = re.subn(pattern, replacement, text)
+            count += n
+        return text, count
+
+
+# 拒答话术内置兜底（config refusal.responses.{reason} 取不到时使用，英文文本）
+_FALLBACK_RESPONSES = {
+    "low_confidence": "Sorry, I could not find sufficiently relevant information "
+                      "in the internal knowledge base. Please try rephrasing your "
+                      "question or contact the relevant department.",
+    "out_of_scope": "Your question is outside the coverage of the internal "
+                    "knowledge base. I can only answer questions related to "
+                    "company internal documents.",
+    "safety": "I am unable to answer questions involving security-sensitive content.",
+}
+
+
+class RefusalCheck:
+    """拒答检查：低置信度 / 超出知识库范围 / 安全敏感 三规则"""
+
+    def __init__(self, confidence_threshold: Optional[float] = None):
+        if confidence_threshold is None:
+            confidence_threshold = ConfigRegistry.get(
+                "refusal.confidence_threshold", 0.45)
+        self.confidence_threshold = float(confidence_threshold)
+
+    def evaluate(self, query: str, retrieval_result) -> Tuple[bool, Optional[str]]:
+        """返回 (是否拒答, 拒答原因)；retrieval_result 需有 .docs 属性"""
+        docs = getattr(retrieval_result, "docs", None) or []
+
+        # 规则 1: docs 为空 或 docs[0].score < 阈值 → low_confidence
+        if not docs or docs[0].score < self.confidence_threshold:
+            return True, "low_confidence"
+
+        # 规则 2: query 命中 out_of_scope 关键词 → out_of_scope
+        for kw in ConfigRegistry.get("refusal.rules.out_of_scope_keywords", []) or []:
+            if kw in query:
+                return True, "out_of_scope"
+
+        # 规则 3: query 命中 sensitive 关键词 → safety
+        for kw in ConfigRegistry.get("refusal.rules.sensitive_keywords", []) or []:
+            if kw in query:
+                return True, "safety"
+
+        return False, None
+
+
+class PostProcessor:
+    """后处理编排：RefusalCheck → 拒答话术 / PIIScrubber 脱敏"""
+
+    def __init__(self, refusal_check: Optional[RefusalCheck] = None):
+        self.refusal_check = refusal_check or RefusalCheck()
+        self._scrubber = PIIScrubber()
+
+    def process(self, answer: str, query: str, retrieval_result) -> PostProcessResult:
+        refused, reason = self.refusal_check.evaluate(query, retrieval_result)
+        if refused:
+            template = ConfigRegistry.get(
+                f"refusal.responses.{reason}",
+                _FALLBACK_RESPONSES.get(reason, ""),
+            )
+            return PostProcessResult(
+                answer=template, refused=True, refusal_reason=reason)
+        redacted, count = self._scrubber.redact(answer)
+        return PostProcessResult(answer=redacted, pii_redact_count=count)
