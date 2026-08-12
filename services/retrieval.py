@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -52,16 +53,24 @@ class RetrievalService:
         self.reranker = reranker or Reranker()
         self.scanner = scanner or InjectionScanner()
         self.guard = guard or get_guard_singleton()
+        # 专用线程池（设计文档 §3.3）：同步检索/精排移出事件循环线程，
+        # 使阶段超时（asyncio.wait_for）在阻塞调用上可达（评审 I-1）
+        self._retrieval_pool = ThreadPoolExecutor(
+            max_workers=int(ConfigRegistry.get("retrieval.max_workers", 2)))
+        self._rerank_pool = ThreadPoolExecutor(
+            max_workers=int(ConfigRegistry.get("reranker.max_workers", 3)))
 
-    async def _call(self, fn, *args, **kwargs):
-        """下层组件可能是同步（真实实现）或异步（测试 mock）— 统一适配。
+    async def _call(self, fn, pool, *args, **kwargs):
+        """下层组件可能是异步（测试 mock）或同步（真实实现）— 统一适配。
 
-        同步实现在事件循环内直接执行：单线程串行调用可避免 chromadb 客户端跨线程并发。
+        异步函数直接 await（AsyncMock 兼容）；同步函数提交到专用线程池执行，
+        阻塞期间事件循环保持自由，阶段超时可达。
+        注意：run_in_executor 仅支持位置参数，调用点须按函数签名传位置参数。
         """
-        result = fn(*args, **kwargs)
-        if asyncio.iscoroutine(result):
-            return await result
-        return result
+        if asyncio.iscoroutinefunction(fn):
+            return await fn(*args, **kwargs)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(pool, fn, *args)
 
     async def retrieve(self, query: str, doc_type: str = None) -> RetrievalOutput:
         total_start = time.perf_counter()
@@ -72,8 +81,8 @@ class RetrievalService:
         try:
             result = await self.guard.with_stage_timeout(
                 "retrieval",
-                self._call(self.retriever.retrieve, query, top_k=20,
-                           doc_type_filter=doc_type))
+                self._call(self.retriever.retrieve, self._retrieval_pool,
+                           query, 20, doc_type))
         except StageTimeoutError:
             logger.warning("retrieval_stage_timeout", query=query)
         retrieval_ms = int((time.perf_counter() - t0) * 1000)
@@ -91,7 +100,8 @@ class RetrievalService:
             top_n = int(ConfigRegistry.get("reranker.top_n", 5))
             try:
                 candidates = await self.guard.with_stage_timeout(
-                    "rerank", self._call(self.reranker.rerank, query, candidates))
+                    "rerank", self._call(self.reranker.rerank, self._rerank_pool,
+                                         query, candidates))
             except (StageTimeoutError, CircuitBreakerOpen):
                 # 降级：跳过 rerank，直接用粗排结果截断 top_n 兜底
                 degraded = True

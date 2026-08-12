@@ -8,6 +8,7 @@
 """
 import asyncio
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -113,7 +114,8 @@ def test_retrieval_service_rerank_reorders_docs():
     assert out.injection_blocked == 1
     assert out.degraded is False
     assert set(out.timing_ms) == {"retrieval", "rerank", "total"}
-    retriever.retrieve.assert_awaited_with("年假有几天", top_k=20, doc_type_filter="handbook")
+    # 调用点按函数签名传位置参数（run_in_executor 仅支持位置参数）
+    retriever.retrieve.assert_awaited_with("年假有几天", 20, "handbook")
     reranker.rerank.assert_awaited_once()
     scanner.scan.assert_called_once()
 
@@ -206,6 +208,57 @@ def test_retrieval_service_rerank_disabled():
     assert out.mode == "hybrid"
     assert out.docs[0].chunk_id == "c1"
     reranker.rerank.assert_not_awaited()
+
+
+def test_stage_timeout_reaches_sync_retrieval():
+    """I-1 精确回归：同步阻塞检索必须能被阶段超时打断（时间上可达）"""
+    ConfigRegistry.init("config.yaml")
+    ConfigRegistry.override("retrieval.timeout", 0.1)
+
+    def slow_retrieve(query, top_k=20, doc_type_filter=None):
+        time.sleep(2)   # 同步阻塞 2s
+        return RetrievalResult(docs=[], mode="vector-only")
+
+    retriever = MagicMock()
+    retriever.retrieve.side_effect = slow_retrieve
+    svc = RetrievalService(retriever=retriever, guard=ResilienceGuard())
+
+    start = time.perf_counter()
+    result = asyncio.run(svc.retrieve("test", None))
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 1.0, f"超时未生效: {elapsed:.2f}s（若 >1.5s 说明修复失败）"
+    assert result.docs == []          # 超时降级为空结果
+
+
+def test_event_loop_responsive_during_blocked_retrieval():
+    """I-1 并发影响回归：阻塞检索期间事件循环仍自由（心跳可继续跳动）"""
+    ConfigRegistry.init("config.yaml")
+    ConfigRegistry.override("retrieval.timeout", 0.15)   # 心跳窗口 0.05s×2 < 超时，避免边界竞争
+
+    def slow_retrieve(query, top_k=20, doc_type_filter=None):
+        time.sleep(2)
+        return RetrievalResult(docs=[], mode="vector-only")
+
+    async def scenario():
+        retriever = MagicMock()
+        retriever.retrieve.side_effect = slow_retrieve
+        svc = RetrievalService(retriever=retriever, guard=ResilienceGuard())
+
+        ticks = []
+
+        async def heartbeat():
+            while True:
+                await asyncio.sleep(0.05)
+                ticks.append(time.perf_counter())
+
+        hb = asyncio.create_task(heartbeat())
+        await svc.retrieve("test", None)   # 内部 0.15s 超时返回
+        hb.cancel()
+        return ticks
+
+    ticks = asyncio.run(scenario())
+    assert len(ticks) >= 2, f"事件循环被阻塞: 心跳仅 {len(ticks)} 次"
 
 
 # ═══ 2. ChatService ═════════════════════════════════════════
