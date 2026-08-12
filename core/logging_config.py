@@ -6,6 +6,7 @@ def setup_logging() -> None:
     log_dir = ConfigRegistry.get("logging.log_dir", "data/logs")
 
     processors = [
+        structlog.contextvars.merge_contextvars,   # 支持 API 层 request_id 上下文注入
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
