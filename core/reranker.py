@@ -103,7 +103,11 @@ class Reranker:
 
     def _rerank_impl(self, query: str, candidates: List[ScoredDoc]) -> List[ScoredDoc]:
         model = self._ensure_model()
-        pairs = [(query, doc.text) for doc in candidates]
+        # 输入截断 200 字符（性能实测驱动：真实候选 15 条 sum=6231 字符 → 全文推理
+        # 2248ms 超 2s 超时预算 → 评估日志大量 rerank_degraded）。
+        # 相关性判断的黄金信号在 chunk 开头：chunker 注入了 heading_path 前缀
+        # （[标题路径]），200 字符覆盖标题 + 段落开头，截断后预计 ~900ms。
+        pairs = [(query, doc.text[:200]) for doc in candidates]
         scores = model.predict(pairs)
         # predict 返回形状可能为 (n,) 或 (n, 1)，统一展平
         flat = scores.ravel() if hasattr(scores, "ravel") else list(scores)

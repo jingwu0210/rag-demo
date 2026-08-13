@@ -27,7 +27,9 @@ reranker:
   model: BAAI/bge-reranker-v2-m3
   device: mps
   top_n: 5
-  candidates_multiplier: 3
+  candidates_multiplier: 1.5        # 粗排候选 = top_k(20) × 1.5 = 30。
+                                     # 60 候选（×3）推理 ~1.8s 贴死 2s 超时 → 频繁降级
+                                     # （评估日志实测）；30 候选 ~0.9s 留 1.1s 余量
   timeout: 2
   max_workers: 3
   circuit_breaker:
