@@ -32,15 +32,28 @@ export DEEPSEEK_API_KEY=<your-key>
 | 脚本 | 用途 |
 |------|------|
 | `scripts/generate_corpus.py` | 生成 10 个 mock 语料文档 → `data/corpus/`（设计文档 §6.4） |
-| `scripts/ingest_corpus.py` | 语料入库（OCR/分片/向量化/版本管理） |
+| `scripts/ingest_corpus.py` | 语料入库（三模式：增量扫描 / 单文件 / 安全 wipe，见下） |
 | `scripts/verify_corpus.py` | 入库验收（版本替换/OCR/注入样本/过期埋点/双语 6 项） |
 | `scripts/generate_test_set.py` | QA 测试集生成（DeepSeek LLM 生成 + 人工修正） |
 | `scripts/inspect_db.py` | 数据库查看工具（见下） |
 
 ```bash
-# 语料
+# 语料生成
 HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/generate_corpus.py
+
+# 入库 — 增量（默认）：扫描 data/corpus/ 自动发现新文件
+#   新文件→ingested / 已有文件→skipped（hash 相同）/ 同 doc_group 新版本→replaced
 HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py
+
+# 入库 — 单文件（新文档零代码改动）
+HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py \
+    --file data/corpus/new_policy.pdf --doc-type handbook --version v1.0
+
+# 入库 — 安全 wipe 重灌（chunker 参数/embedding 模型/metadata 格式变更时）
+#   自动备份 cache.db → SQLite 表清空 → ChromaDB 集合重建 → 全量重灌
+HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py --wipe
+
+# 入库验收
 .venv/bin/python scripts/verify_corpus.py
 
 # 数据查看（data/cache.db 各表）
