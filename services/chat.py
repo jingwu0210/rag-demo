@@ -19,7 +19,7 @@ from core.compressor import ConversationCompressor
 from core.config import ConfigRegistry
 from core.generator import Generator
 from core.guard import StageTimeoutError
-from core.logging_config import get_logger
+from core.logging_config import get_logger, get_request_id
 from core.metadata import MetadataFilter
 from core.postprocess import PostProcessor
 from core.prompt import PromptContext
@@ -61,9 +61,16 @@ class ChatService:
 
         # 1. 缓存（cache.l1.enabled 时）：命中直接返回，不建会话不检索；
         #    命中路径同样写 request_metrics（cache_hit=1），缓存命中率才可计算（I-2 终审）
+        rid = get_request_id()
         if cache_enabled:
             cache_start = time.perf_counter()
             cached = await self.cache.get(query, mode)
+            # L2 埋点: cache_check
+            logger.info("cache_check",
+                        request={"id": rid},
+                        cache={"hit": cached is not None,
+                               "key": (self.cache.cache_key(query, mode)[:8]
+                                       if cached is not None else None)})
             if cached is not None:
                 cache_ms = int((time.perf_counter() - cache_start) * 1000)
                 return await self._from_cache(cached, session_id, mode, cache_ms)
@@ -118,6 +125,39 @@ class ChatService:
                 "completion": gen_result.token_completion,
                 "total": gen_result.token_total,
             }
+
+            # L2 埋点: generation_complete（answer 预览 = PIIScrubber 脱敏后前 200 字符）
+            logger.info("generation_complete",
+                        request={"id": rid},
+                        llm={
+                            "provider": ConfigRegistry.get("llm.provider", ""),
+                            "model": ConfigRegistry.get("llm.model", ""),
+                            "tokens_prompt": tokens.get("prompt", 0),
+                            "tokens_completion": tokens.get("completion", 0),
+                            "latency_ms": gen_result.latency_ms,
+                        },
+                        answer={
+                            "preview": answer[:200],
+                            "truncated": len(answer) > 200,
+                            "length": len(answer),
+                        })
+
+            # L2 埋点: refusal_triggered（仅拒答时）
+            if refused:
+                logger.info("refusal_triggered",
+                            request={"id": rid},
+                            refusal={
+                                "reason": refusal_reason,
+                                "signal": (round(float(retrieval_output.vector_top1_sim), 4)
+                                           if retrieval_output and retrieval_output.vector_top1_sim is not None
+                                           else (round(float(docs[0].score), 4) if docs else None)),
+                            })
+
+            # L2 埋点: pii_redacted（仅脱敏触发时）
+            if pii_redact_count > 0:
+                logger.info("pii_redacted",
+                            request={"id": rid},
+                            pii={"redactions": pii_redact_count})
         else:
             answer = _TIMEOUT_ANSWER
             refused = False

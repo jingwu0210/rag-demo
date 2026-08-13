@@ -23,9 +23,11 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, Response, Upl
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from core.bilingual import BilingualHandler
 from core.config import ConfigRegistry
 from core.guard import ConcurrencyLimitExceeded
 from core.logging_config import get_logger
+from core.metadata import MetadataFilter
 from storage.sqlite_client import get_db
 
 from api.schemas import ChatRequest, ChatResponseSchema, HealthResponse, IngestResponse
@@ -49,6 +51,26 @@ async def _session_exists(session_id: str) -> bool:
         return row is not None
     finally:
         await db.close()
+
+
+async def _history_turns(session_id: Optional[str]) -> int:
+    """L2 埋点：查询会话历史轮数（chat_request_start 用）。
+
+    埋点查询失败（如测试环境未建表）不影响主流程 → 返回 0。
+    """
+    if not session_id:
+        return 0
+    try:
+        db = await get_db()
+        try:
+            cur = await db.execute(
+                "SELECT COUNT(*) AS n FROM turns WHERE session_id = ?", (session_id,))
+            row = await cur.fetchone()
+            return int(row["n"]) if row else 0
+        finally:
+            await db.close()
+    except Exception:
+        return 0
 
 
 def _chat_response_from(result, session_id: str) -> ChatResponseSchema:
@@ -85,7 +107,15 @@ async def chat(req: ChatRequest, request: Request):
     guard = request.app.state.guard
     request_id = uuid.uuid4().hex
     structlog.contextvars.bind_contextvars(request_id=request_id)
-    logger.info("chat_request_start", request_id=request_id, session_id=req.session_id)
+    # L2 埋点: chat_request_start（query 截断 200 + 语言 + doc_type + 历史轮数）
+    logger.info("chat_request_start",
+                request={"id": request_id, "session_id": req.session_id},
+                query={
+                    "text": req.query[:200],
+                    "language": BilingualHandler.detect(req.query),
+                    "doc_type": MetadataFilter.classify(req.query),
+                    "history_turns": await _history_turns(req.session_id),
+                })
 
     try:
         sem = await guard.acquire()
@@ -109,9 +139,17 @@ async def chat(req: ChatRequest, request: Request):
             chat_service.process(req.query, session_id))
 
     resp = _chat_response_from(result, session_id)
-    logger.info("chat_request_end", request_id=request_id,
-                session_id=resp.session_id, partial=resp.partial,
-                refused=resp.refused, from_cache=resp.from_cache)
+    # L2 埋点: chat_request_end（summary 组：一次请求完整画像）
+    logger.info("chat_request_end",
+                request={"id": request_id, "session_id": resp.session_id},
+                summary={
+                    "total_latency_ms": (resp.timing_ms or {}).get("total", 0),
+                    "tokens_total": (resp.token_usage or {}).get("total", 0),
+                    "cache_hit": resp.from_cache,
+                    "refused": resp.refused,
+                    "timeout": resp.partial,
+                    "degraded": False,
+                })
     structlog.contextvars.unbind_contextvars("request_id")
     return resp
 
