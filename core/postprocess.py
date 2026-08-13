@@ -80,12 +80,21 @@ class RefusalCheck:
                 "refusal.confidence_threshold", 0.45)
         self.confidence_threshold = float(confidence_threshold)
 
-    def evaluate(self, query: str, retrieval_result) -> Tuple[bool, Optional[str]]:
-        """返回 (是否拒答, 拒答原因)；retrieval_result 需有 .docs 属性"""
-        docs = getattr(retrieval_result, "docs", None) or []
+    def evaluate(self, query: str, retrieval_result, mode: str = None) -> Tuple[bool, Optional[str]]:
+        """返回 (是否拒答, 拒答原因)；retrieval_result 需有 .docs 属性
 
-        # 规则 1: docs 为空 或 docs[0].score < 阈值 → low_confidence
-        if not docs or docs[0].score < self.confidence_threshold:
+        分数语义按检索模式区分（smoke 测试发现的误拒答根因）：
+        - vector-only: score 是余弦相似度（0-1），可与 confidence_threshold 比较
+        - hybrid: score 是 RRF 分数（~0.03 量级），与阈值不可比 → 仅空结果拒答
+        - hybrid+rerank: score 是 CrossEncoder 分数（无界），与阈值不可比 → 仅空结果拒答
+        """
+        docs = getattr(retrieval_result, "docs", None) or []
+        mode = mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
+
+        # 规则 1: 空结果 → low_confidence；vector-only 额外做分数阈值比较
+        if not docs:
+            return True, "low_confidence"
+        if mode == "vector-only" and docs[0].score < self.confidence_threshold:
             return True, "low_confidence"
 
         # 规则 2: query 命中 out_of_scope 关键词 → out_of_scope
@@ -108,8 +117,8 @@ class PostProcessor:
         self.refusal_check = refusal_check or RefusalCheck()
         self._scrubber = PIIScrubber()
 
-    def process(self, answer: str, query: str, retrieval_result) -> PostProcessResult:
-        refused, reason = self.refusal_check.evaluate(query, retrieval_result)
+    def process(self, answer: str, query: str, retrieval_result, mode: str = None) -> PostProcessResult:
+        refused, reason = self.refusal_check.evaluate(query, retrieval_result, mode=mode)
         if refused:
             template = ConfigRegistry.get(
                 f"refusal.responses.{reason}",

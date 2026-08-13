@@ -23,6 +23,8 @@ class CachedAnswer:
     sources: list = field(default_factory=list)
     token_usage: int = 0
     retrieval_mode: str = ""
+    refused: bool = False
+    refusal_reason: Optional[str] = None
 
 
 class CacheManager:
@@ -42,8 +44,8 @@ class CacheManager:
         db = await get_db()
         try:
             cursor = await db.execute(
-                "SELECT answer, sources_json, token_usage, retrieval_mode "
-                "FROM cache_entries "
+                "SELECT answer, sources_json, token_usage, retrieval_mode, "
+                "refused, refusal_reason FROM cache_entries "
                 "WHERE cache_key = ? "
                 "AND strftime('%s','now') - strftime('%s', created_at) < ?",
                 (key, self.ttl),
@@ -55,6 +57,8 @@ class CacheManager:
                     sources=json.loads(row["sources_json"] or "[]"),
                     token_usage=int(row["token_usage"] or 0),
                     retrieval_mode=row["retrieval_mode"] or mode,
+                    refused=bool(row["refused"]) if "refused" in row.keys() else False,
+                    refusal_reason=row["refusal_reason"] if "refusal_reason" in row.keys() else None,
                 )
             # miss 或过期：过期行顺带删除（无过期行时影响 0 行，幂等）
             await db.execute(
@@ -71,6 +75,7 @@ class CacheManager:
     async def put(
         self, query: str, mode: str, answer: str,
         sources: List[dict], token_usage: int,
+        refused: bool = False, refusal_reason: Optional[str] = None,
     ) -> None:
         """写入/刷新缓存（INSERT OR REPLACE）；写入后超 max_entries 执行 LRU 清理"""
         key = self.cache_key(query, mode)
@@ -79,10 +84,12 @@ class CacheManager:
             # 显式写入微秒级 created_at，保证 LRU 排序在秒内也能确定
             await db.execute(
                 "INSERT OR REPLACE INTO cache_entries "
-                "(cache_key, query, answer, sources_json, token_usage, retrieval_mode, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(cache_key, query, answer, sources_json, token_usage, retrieval_mode, "
+                "refused, refusal_reason, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (key, query, answer, json.dumps(sources, ensure_ascii=False),
-                 int(token_usage or 0), mode, datetime.utcnow().isoformat()),
+                 int(token_usage or 0), mode,
+                 int(bool(refused)), refusal_reason, datetime.utcnow().isoformat()),
             )
             cursor = await db.execute("SELECT COUNT(*) AS n FROM cache_entries")
             row = await cursor.fetchone()

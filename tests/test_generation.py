@@ -267,7 +267,7 @@ def test_refusal_low_score_below_threshold():
 
     ConfigRegistry.init("config.yaml")
     rr = _rr([ScoredDoc(chunk_id="c", text="t", score=0.2)])
-    refused, reason = RefusalCheck().evaluate("正常问题", rr)
+    refused, reason = RefusalCheck().evaluate("正常问题", rr, mode="vector-only")
     assert (refused, reason) == (True, "low_confidence")
 
 
@@ -276,7 +276,7 @@ def test_refusal_custom_threshold():
 
     ConfigRegistry.init("config.yaml")
     rr = _rr([ScoredDoc(chunk_id="c", text="t", score=0.6)])
-    refused, reason = RefusalCheck(confidence_threshold=0.8).evaluate("正常问题", rr)
+    refused, reason = RefusalCheck(confidence_threshold=0.8).evaluate("正常问题", rr, mode="vector-only")
     assert (refused, reason) == (True, "low_confidence")
 
 

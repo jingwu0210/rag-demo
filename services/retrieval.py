@@ -99,6 +99,10 @@ class RetrievalService:
             t1 = time.perf_counter()
             top_n = int(ConfigRegistry.get("reranker.top_n", 5))
             try:
+                # 预热在阶段超时之外：首次加载模型耗时 >2s，会误触 stage_timeout
+                # 导致永远冷启动降级。预热只在模型未加载时发生（幂等）。
+                warmup = self._call(self.reranker.ensure_loaded, self._rerank_pool)
+                await asyncio.wait_for(warmup, timeout=180)
                 candidates = await self.guard.with_stage_timeout(
                     "rerank", self._call(self.reranker.rerank, self._rerank_pool,
                                          query, candidates))
@@ -106,6 +110,11 @@ class RetrievalService:
                 # 降级：跳过 rerank，直接用粗排结果截断 top_n 兜底
                 degraded = True
                 logger.warning("rerank_degraded", query=query, top_n=top_n)
+                candidates = candidates[:top_n]
+            except Exception:
+                # 预热失败（模型不可用等）：降级不重排，但记录错误
+                degraded = True
+                logger.warning("rerank_warmup_failed", query=query, exc_info=True)
                 candidates = candidates[:top_n]
             rerank_ms = int((time.perf_counter() - t1) * 1000)
 
