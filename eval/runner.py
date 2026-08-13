@@ -157,15 +157,13 @@ COMPLIANCE_JUDGE_PROMPT = """你是合规打分裁判。给定【参考文档片
 模型回答：
 {llm_answer}"""
 
-STYLE_JUDGE_PROMPT = """对比两段AI回答的写作风格、正式程度、排版结构、话术规范，打1-5分：
-5=高度统一，4=轻微差异，3=中等差异，2=差异明显，1=完全不同
-仅输出数字。
+STYLE_RUBRIC_PROMPT = """你是写作风格裁判。对照以下企业知识库回答规范，给回答打 1-5 分：
+规范：正式企业话术、结论先行、分点/结构化排版、引用来源标注、无口语化表达。
+5=完全符合规范，4=基本符合，3=部分符合，2=明显偏离，1=完全不符合。
+只输出数字分数。
 
-回答A：
-{ans1}
-
-回答B：
-{ans2}"""
+回答：
+{answer}"""
 
 
 def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[int]:
@@ -221,25 +219,18 @@ def _judge_compliance(answers_chunks: List[tuple]) -> List[Optional[int]]:
     return asyncio.run(_judge_batch_async(prompts))
 
 
-def _evaluate_style_consistency(answers: List[str], n_pairs: int = 20, seed: int = 42) -> Optional[float]:
-    """Style Consistency：固定种子抽 N 对 → pairwise 5 分 judge → 均分/5。
+def _judge_style_absolute(answers: List[str]) -> List[Optional[int]]:
+    """Style 绝对打分（v1.4 重设计）：每个答案 vs 风格规范独立打 1-5 分。
 
-    固定种子保证同一测试集每次评估结果完全一致（before/after 可对比）。
+    替代原 pairwise（配置内答案互比）：pairwise 测的是"答案集合内部格式方差"，
+    且不同配置抽样对完全不同 → 跨配置不可比。绝对打分用同一规范同一 judge
+    全量答案，跨配置可比且完全可复现（无抽样）。
     """
-    answers = [a for a in answers if a and a.strip()]
-    if len(answers) < 2:
-        return None
-    rng = random.Random(seed)
-    # 确定性抽样：从所有组合中固定种子选 n_pairs 对
-    pairs = [(a, b) for i, a in enumerate(answers) for b in answers[i + 1:]]
-    if len(pairs) > n_pairs:
-        pairs = rng.sample(pairs, n_pairs)
-    prompts = [STYLE_JUDGE_PROMPT.format(ans1=a, ans2=b) for a, b in pairs]
-    scores = asyncio.run(_judge_batch_async(prompts))
-    valid = [s for s in scores if s is not None]
-    if not valid:
-        return None
-    return round(sum(valid) / len(valid) / 5, 4)
+    prompts = [STYLE_RUBRIC_PROMPT.format(answer=a[:2000])
+               for a in answers if a and a.strip()]
+    if not prompts:
+        return []
+    return asyncio.run(_judge_batch_async(prompts))
 
 
 # ── 测试集 hash ─────────────────────────────────────────────
@@ -273,6 +264,9 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
         per_qa: List[dict] = []
         latencies: List[int] = []
         tokens: List[int] = []
+        prompt_tokens: List[int] = []       # E3: token 分解观测
+        completion_tokens: List[int] = []
+        chunks_counts: List[int] = []       # E3: chunk 数观测
         faithfulness_scores: List[float] = []
         precision_scores: List[float] = []
         compliance_scores: List[float] = []   # 5 分制原始分（聚合用 /5 均值）
@@ -293,7 +287,10 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             answer = resp.answer or ""
             sources = list(resp.sources or [])
             latency = int((resp.timing_ms or {}).get("total", 0))
-            token_total = int((resp.token_usage or {}).get("total", 0))
+            usage = resp.token_usage or {}
+            token_total = int(usage.get("total", 0))
+            token_prompt = int(usage.get("prompt", 0))
+            token_completion = int(usage.get("completion", 0))
             refused = bool(resp.refused)
             from_cache = bool(resp.from_cache)
             refusal_reason = resp.refusal_reason
@@ -351,6 +348,9 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             })
             latencies.append(latency)
             tokens.append(token_total)
+            prompt_tokens.append(token_prompt)
+            completion_tokens.append(token_completion)
+            chunks_counts.append(len(sources))
             if faithfulness is not None:
                 faithfulness_scores.append(faithfulness)
             if context_precision is not None:
@@ -367,8 +367,12 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             q["answer_compliance"] = compliance_map.get(q["question"])
         compliance_scores = [s for s in compliance_map.values() if s is not None]
 
-        style = _evaluate_style_consistency(
+        # v1.4: Style 改为 vs 风格规范绝对打分（全量答案，跨配置可比）
+        style_scores = _judge_style_absolute(
             [q["answer"] for q in per_qa if q["answer"] and not q["refused"]])
+        valid_styles = [s for s in style_scores if s is not None]
+        style = (round(sum(valid_styles) / len(valid_styles) / 5, 4)
+                 if valid_styles else None)
 
         n = max(len(test_set), 1)
         agg = {
@@ -388,6 +392,10 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             "p50_latency_ms": int(np.percentile(latencies, 50)) if latencies else 0,
             "p95_latency_ms": int(np.percentile(latencies, 95)) if latencies else 0,
             "avg_tokens_per_call": int(np.mean(tokens)) if tokens else 0,
+            # E3: token/chunk 分解观测（机制透明化）
+            "avg_prompt_tokens": int(np.mean(prompt_tokens)) if prompt_tokens else 0,
+            "avg_completion_tokens": int(np.mean(completion_tokens)) if completion_tokens else 0,
+            "avg_chunks_per_call": round(float(np.mean(chunks_counts)), 2) if chunks_counts else 0,
             "timeout_rate": round(timeout_count / n, 4),
             "total_pii_redactions": total_pii,
             "total_injections_blocked": total_injections,
@@ -419,15 +427,17 @@ async def _save_eval_history(agg: dict) -> None:
             "answer_compliance, style_consistency, refusal_appropriateness, "
             "p50_latency_ms, p95_latency_ms, avg_tokens_per_call, "
             "total_pii_redactions, total_injections_blocked, timeout_rate, "
+            "avg_prompt_tokens, avg_completion_tokens, avg_chunks_per_call, "
             "per_qa_results_json) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (agg["run_id"], agg["config_name"], agg["test_set_hash"], agg["total_requests"],
              agg["faithfulness"], agg["context_precision"], agg["context_recall"],
              agg["answer_relevancy"], agg["answer_compliance"], agg["style_consistency"],
              agg["refusal_appropriateness"], agg["p50_latency_ms"], agg["p95_latency_ms"],
              agg["avg_tokens_per_call"], agg["total_pii_redactions"],
              agg["total_injections_blocked"], agg["timeout_rate"],
-             agg["per_qa_results_json"]))
+             agg["avg_prompt_tokens"], agg["avg_completion_tokens"],
+             agg["avg_chunks_per_call"], agg["per_qa_results_json"]))
         await db.commit()
     finally:
         await db.close()

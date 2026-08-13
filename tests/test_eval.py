@@ -130,7 +130,7 @@ def test_run_comparison_executes_three_configs(tmp_path):
     test_set = _sample_test_set()
     with patch("eval.runner._try_ragas_score", return_value=0.8), \
          patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
-         patch("eval.runner._evaluate_style_consistency", return_value=0.8):
+         patch("eval.runner._judge_style_absolute", return_value=[4, 4, 4, 4]):
         results = run_comparison(service, test_set, run_id="run_e2e")
 
     # 3 个配置都被执行
@@ -222,7 +222,7 @@ def test_run_comparison_ragas_import_failure_does_not_abort(tmp_path, monkeypatc
 
     service = FakeChatService()
     with patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
-         patch("eval.runner._evaluate_style_consistency", return_value=None):
+         patch("eval.runner._judge_style_absolute", return_value=[4, 4, 4, 4]):
         results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas_import")
 
     assert len(results) == 3
@@ -242,7 +242,7 @@ def test_run_comparison_ragas_unavailable_yields_none(tmp_path):
     service = FakeChatService()
     with patch("eval.runner._try_ragas_score", return_value=None), \
          patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
-         patch("eval.runner._evaluate_style_consistency", return_value=None):
+         patch("eval.runner._judge_style_absolute", return_value=[4, 4, 4, 4]):
         results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas")
     assert len(results) == 3
     assert all(r["faithfulness"] is None for r in results)
@@ -308,7 +308,8 @@ def test_generate_report_writes_csv_and_markdown(tmp_path):
         rows = list(csv.reader(f))
     assert rows[0] == ["config", "faithfulness", "context_precision", "answer_compliance",
                        "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
-                       "avg_tokens", "total_requests"]
+                       "avg_tokens", "avg_prompt_tokens", "avg_completion_tokens",
+                       "avg_chunks", "timeout_rate", "total_requests"]
     assert len(rows) == 4  # header + 3 config
     configs = {row[0] for row in rows[1:]}
     assert configs == {"vector-only", "hybrid", "hybrid+rerank"}

@@ -27,7 +27,8 @@ logger = get_logger(module="eval.report")
 # CSV 列（brief 精确指定）
 CSV_COLUMNS = ["config", "faithfulness", "context_precision", "answer_compliance",
                "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
-               "avg_tokens", "total_requests"]
+               "avg_tokens", "avg_prompt_tokens", "avg_completion_tokens",
+               "avg_chunks", "timeout_rate", "total_requests"]
 
 # CSV 列 → results dict 键（run_comparison 聚合结果）
 _COLUMN_KEY = {
@@ -40,6 +41,10 @@ _COLUMN_KEY = {
     "p50_ms": "p50_latency_ms",
     "p95_ms": "p95_latency_ms",
     "avg_tokens": "avg_tokens_per_call",
+    "avg_prompt_tokens": "avg_prompt_tokens",
+    "avg_completion_tokens": "avg_completion_tokens",
+    "avg_chunks": "avg_chunks_per_call",
+    "timeout_rate": "timeout_rate",
     "total_requests": "total_requests",
 }
 
@@ -55,6 +60,8 @@ _METRIC_DIRECTION = {
     "style_consistency": "higher",
     "p50_latency_ms": "lower", "p95_latency_ms": "lower",
     "avg_tokens_per_call": "lower",
+    "avg_prompt_tokens": "lower", "avg_completion_tokens": "lower",
+    "avg_chunks_per_call": "lower", "timeout_rate": "lower",
 }
 
 _METRIC_LABEL = {
@@ -63,6 +70,10 @@ _METRIC_LABEL = {
     "style_consistency": "Style Consistency",
     "p50_latency_ms": "P50 Latency (ms)", "p95_latency_ms": "P95 Latency (ms)",
     "avg_tokens_per_call": "Avg Tokens/Call",
+    "avg_prompt_tokens": "Avg Prompt Tokens",
+    "avg_completion_tokens": "Avg Completion Tokens",
+    "avg_chunks_per_call": "Avg Chunks/Call",
+    "timeout_rate": "Timeout Rate",
 }
 
 
