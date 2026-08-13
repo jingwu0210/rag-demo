@@ -13,6 +13,7 @@
 | v1.1 | 2026-08-13 | 新增 §6.4 语料设计；标题与文件名去日期化，改由本节追踪版本 |
 | v1.2 | 2026-08-13 | 五大指标完整计算方案落地（§6.3 重写）：Answer Compliance 改自研 LLM judge 5 分制 score/5 均值；Style Consistency 落地 pairwise judge 固定种子；Refusal 四场景纯规则含漏拒；新增 Timeout Rate 附加指标。检索分数语义契约（§4.3 AdaptiveK 按 mode 区分阈值 + hybrid_min_score；§4.6 RefusalCheck OOS 分层重设计 — hybrid 系用 vector_top1_sim 旁路信号）；sources 取消 500 字符截断；rerank 候选池独立（skip_adaptive） |
 | v1.4 | 2026-08-13 | 评估失真五点修复：Style Consistency 重设计（pairwise → vs 风格规范绝对打分，跨配置可比）；测试集 53→65 条（精确术语类/复杂多跳类/边界模糊类三类区分度样本）；Token/Chunk 分解观测（avg_prompt_tokens/avg_completion_tokens/avg_chunks_per_call/timeout_rate 列） |
+| v1.5 | 2026-08-13 | §6.3 新增"评估输出物管理"：三层数据生命周期（eval_history 权威/报表文件时间戳归档/评估档案交付物）；报表固定名覆盖的设计缺陷补记 |
 | v1.3 | 2026-08-13 | 日志系统升级（§6.2）：JSON 格式头部四字段平铺 + 业务分组嵌套（timestamp 行首）；8 事件正常路径埋点（chat_request_start/cache_check/retrieval_complete/rerank_complete/generation_complete/refusal_triggered/pii_redacted/chat_request_end）；query 截断 200 记录 + answer 预览 200；eval.sh 日志按时间戳独立文件 + stdout/stderr 分流 |
 
 ---
@@ -2371,6 +2372,16 @@ eval.sh 每次执行 → 自动生成 run_id → 所有指标写入 eval_history
 python -m eval.report --compare <run_id_before> <run_id_after>
     → 自动产出 before/after CSV + 高亮改善/恶化项
 ```
+
+#### 评估输出物管理（三层数据生命周期）
+
+| 层 | 权威性 | 命名/生命周期 | 保护 |
+|----|--------|--------------|------|
+| **eval_history（DB）** | 权威数据源 — `compare_runs` 的唯一输入，per_qa 明细所在 | 每 (run_id, config_name) 一行，永不覆盖 | 铁律 10：禁止 rm 数据库文件；清缓存走 CacheManager.invalidate_all() |
+| **报表文件** | 人类可读快照（非权威） | `eval_report-<ts>.csv/md` 带时间戳归档，历史互相不覆盖；`eval_report.csv/md` 仅作最新副本（覆盖允许） | git-ignored（data/eval/results/），权威数据在 DB |
+| **评估档案** | 交付物归档（before/after 数据链） | `docs/eval-history.md`，每轮评估后追加：测试集版本、修复状态、完整指标表、对比结论、数据完整性声明 | 入库（git），交付物之一 |
+
+**设计教训（v1.5 补记）**：报表文件的固定名覆盖问题在 v1.0-v1.4 设计文档中从未定义 — 报表是实施引入的设计外产物，其生命周期无设计背书，导致三轮评估互相覆盖。v1.5 起所有"实施引入的新输出物"必须在本节登记生命周期。
 
 ---
 
