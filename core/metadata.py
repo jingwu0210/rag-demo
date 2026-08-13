@@ -25,10 +25,6 @@ class ExpireFilter:
     def get_where_clause(self):
         if not self.enabled:
             return None
-        cutoff = (datetime.now() - timedelta(days=self.grace_days)).strftime("%Y-%m-%d")
-        return {
-            "$or": [
-                {"effective_date": {"$gte": cutoff}},
-                {"effective_date": None}
-            ]
-        }
+        # chromadb 0.5.23 的 $gte 只接受 int/float → effective_date 存整数 YYYYMMDD
+        cutoff = int((datetime.now() - timedelta(days=self.grace_days)).strftime("%Y%m%d"))
+        return {"effective_date": {"$gte": cutoff}}

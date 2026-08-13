@@ -47,8 +47,8 @@ def main():
     # 4. 过期文档埋点：effective_date=2022-01-01 写入 metadata
     legacy = store.collection.get(where={"source_file_stem": "legacy_tech_manual_v2022"})
     legacy_ok = len(legacy["ids"]) > 0 and all(
-        m.get("effective_date") == "2022-01-01" for m in (legacy["metadatas"] or []))
-    all_pass &= check("过期埋点: legacy effective_date=2022-01-01", legacy_ok)
+        m.get("effective_date") == 20220101 for m in (legacy["metadatas"] or []))
+    all_pass &= check("过期埋点: legacy effective_date=20220101 (int)", legacy_ok)
 
     # 5. 双语语料齐备
     zh = store.collection.get(where={"language": "zh"})

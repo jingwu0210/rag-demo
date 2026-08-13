@@ -1034,14 +1034,9 @@ class ExpireFilter:
         if not self.enabled:
             return None
         
-        cutoff = (datetime.now() - timedelta(days=self.grace_period)).strftime("%Y-%m-%d")
-        # effective_date 为空（无时效要求）的文档不过滤
-        return {
-            "$or": [
-                {"effective_date": {"$gte": cutoff}},
-                {"effective_date": None}          # 无时效标记的文档保留
-            ]
-        }
+        # chromadb 0.5.23 的 $gte 仅支持 int/float 比较 → effective_date 存整数 YYYYMMDD
+        cutoff = int((datetime.now() - timedelta(days=self.grace_period)).strftime("%Y%m%d"))
+        return {"effective_date": {"$gte": cutoff}}
 ```
 
 **配置**：
@@ -1800,7 +1795,7 @@ class VersionedIngestService:
                     "source_file_stem": Path(file_path).stem,
                     "doc_type": doc_type,
                     "version": version or "v1.0",
-                    "effective_date": datetime.now().strftime("%Y-%m-%d"),
+                    "effective_date": int(datetime.now().strftime("%Y%m%d")),  # 整数 YYYYMMDD（chromadb $gte 仅支持数值）
                     "ingested_at": datetime.now().isoformat(),
                     "doc_hash": doc_hash,
                     "language": c.language,
