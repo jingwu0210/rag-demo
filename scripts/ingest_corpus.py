@@ -43,6 +43,7 @@ CORPUS_META = {
     "architecture_overview.md": ("architecture", "v2.1", None, None),
     "incident_response_plan.pdf": ("architecture", "v3.0", None, None),
     "scanned_hr_notice.pdf": ("handbook", "v1.0", None, None),
+    "injection_sample.pdf": ("technical", "v1.0", None, None),  # 安全测试文档（独立存放，防污染正常文档）
 }
 
 DEFAULT_META = ("handbook", "v1.0", None, None)   # 未映射新文件的默认元数据
