@@ -12,6 +12,7 @@
 | v1.0 | 2025-08-12 | 初始版本：十大章节完整设计 |
 | v1.1 | 2026-08-13 | 新增 §6.4 语料设计；标题与文件名去日期化，改由本节追踪版本 |
 | v1.2 | 2026-08-13 | 五大指标完整计算方案落地（§6.3 重写）：Answer Compliance 改自研 LLM judge 5 分制 score/5 均值；Style Consistency 落地 pairwise judge 固定种子；Refusal 四场景纯规则含漏拒；新增 Timeout Rate 附加指标。检索分数语义契约（§4.3 AdaptiveK 按 mode 区分阈值 + hybrid_min_score；§4.6 RefusalCheck OOS 分层重设计 — hybrid 系用 vector_top1_sim 旁路信号）；sources 取消 500 字符截断；rerank 候选池独立（skip_adaptive） |
+| v1.3 | 2026-08-13 | 日志系统升级（§6.2）：JSON 格式头部四字段平铺 + 业务分组嵌套（timestamp 行首）；8 事件正常路径埋点（chat_request_start/cache_check/retrieval_complete/rerank_complete/generation_complete/refusal_triggered/pii_redacted/chat_request_end）；query 截断 200 记录 + answer 预览 200；eval.sh 日志按时间戳独立文件 + stdout/stderr 分流 |
 
 ---
 
@@ -2028,20 +2029,24 @@ PATTERNS = [
 | `circuit_breaker` | string | 熔断状态 | `closed` |
 | `error` | string | 异常信息 | — |
 
-#### 核心埋点事件
+#### 核心埋点事件（v1.3 实现状态）
 
-| 事件 | 触发时机 | 关键字段 |
-|------|------|------|
-| `request_start` | 请求进入 | request_id, session_id |
-| `cache_check` | 缓存查询 | cache_hit, cache_key |
-| `retrieval_start` / `retrieval_complete` | 检索开始/结束 | retrieval_mode, top_k, latency_ms |
-| `rerank_start` / `rerank_complete` | 重排开始/结束 | candidates, top_n, latency_ms |
-| `generation_start` / `generation_complete` | LLM 开始/结束 | provider, model, tokens |
-| `injection_detected` | 检测到注入 | severity, chunk_id, pattern |
-| `refusal_triggered` | 触发拒答 | reason, confidence_score |
-| `stage_timeout` | 阶段超时 | stage, timeout_value |
-| `circuit_open` / `circuit_close` | 熔断器状态变化 | component, failure_count |
-| `request_complete` | 请求完成 | total_latency_ms, tokens_total |
+日志格式（v1.3）：头部四字段平铺（timestamp/level/event/module）+ 业务数据分组嵌套。完整字段定义与样本见交付物 docs/log-field-dictionary.md。
+
+| 事件 | 触发时机 | 关键字段 | 实现状态 |
+|------|------|------|:---:|
+| `chat_request_start` | 请求进入 | request{id, session_id}, query{text截断200, language, doc_type, history_turns} | ✅ v1.3 |
+| `cache_check` | 缓存查询 | request{id}, cache{hit, key} | ✅ v1.3 |
+| `retrieval_complete` | 检索完成 | retrieval{mode, coarse/final chunks, top1, vector_top1_sim, latency_ms} + chunks 前5条明细 | ✅ v1.3 |
+| `rerank_complete` | 精排完成 | rerank{candidates, kept, top1_score, latency_ms} | ✅ v1.3 |
+| `generation_complete` | 生成完成 | llm{provider, model, tokens, latency_ms}, answer{preview200, truncated, length} | ✅ v1.3 |
+| `injection_detected` | 检测到注入 | severity, chunk_id, pattern | ✅ v1.1 |
+| `refusal_triggered` | 触发拒答 | refusal{reason, signal} | ✅ v1.3 |
+| `pii_redacted` | PII 脱敏触发 | pii{redactions} | ✅ v1.3 |
+| `stage_timeout` | 阶段超时 | stage, timeout_value | ✅ v1.1 |
+| `chat_request_end` | 请求完成 | summary{total_latency_ms, tokens_total, cache_hit, refused, timeout, degraded} | ✅ v1.3 |
+
+注：设计清单中的 `retrieval_start`/`rerank_start`/`generation_start` 未单独埋点（start 时刻由前序事件推导，减少日志噪音）；`circuit_open`/`circuit_close` 熔断器状态变化事件在 reranker 接线（I-1 修复）后由 `rerank_degraded` 承载，未独立埋点 — v1.3 起文档与实现对齐。
 
 #### Ops Report 生成逻辑
 
