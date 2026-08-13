@@ -128,7 +128,9 @@ def test_run_comparison_executes_three_configs(tmp_path):
     _init_sqlite(tmp_path)
     service = FakeChatService()
     test_set = _sample_test_set()
-    with patch("eval.runner._try_ragas_score", return_value=0.8):
+    with patch("eval.runner._try_ragas_score", return_value=0.8), \
+         patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
+         patch("eval.runner._evaluate_style_consistency", return_value=0.8):
         results = run_comparison(service, test_set, run_id="run_e2e")
 
     # 3 个配置都被执行
@@ -144,11 +146,11 @@ def test_run_comparison_executes_three_configs(tmp_path):
         # Ragas 指标（patch 固定 0.8）
         assert r["faithfulness"] == 0.8
         assert r["context_precision"] == 0.8
-        # 规则近似：5 条中 4 条非 OOS 且带 sources 答 → 4/5
-        assert r["answer_compliance"] == 0.8
+        # 自研 judge（mock 5 分制 [5,4,5,4]）→ 均值/5 = (18/4)/5 = 0.9
+        assert abs(r["answer_compliance"] - 0.9) < 1e-6
         # 拒答恰当性：4 条非 OOS 未拒 + 1 条 OOS 拒答 → 5/5
         assert r["refusal_appropriateness"] == 1.0
-        assert r["style_consistency"] is None
+        assert r["style_consistency"] == 0.8
         assert r["p50_latency_ms"] == 100
         assert r["p95_latency_ms"] == 100
         # OOS 拒答无 token → (200*4 + 0) / 5
@@ -164,7 +166,9 @@ def test_run_comparison_executes_three_configs(tmp_path):
     per_qa = json.loads(rows[0]["per_qa_results_json"])
     assert len(per_qa) == 5
     oos = [p for p in per_qa if p["is_out_of_scope"]]
-    assert len(oos) == 1 and oos[0]["refused"] is True and oos[0]["answer_compliance"] == 0
+    assert len(oos) == 1 and oos[0]["refused"] is True
+    # OOS 拒答无"回答"可判 → compliance 为 None（judge 只对实际作答打分）
+    assert oos[0]["answer_compliance"] is None
 
 
 def test_apply_config_mode_switches_retriever_dispatch():
@@ -217,14 +221,16 @@ def test_run_comparison_ragas_import_failure_does_not_abort(tmp_path, monkeypatc
     monkeypatch.setattr(eval_runner, "_RAGAS_LLM_READY", False)
 
     service = FakeChatService()
-    results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas_import")
+    with patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
+         patch("eval.runner._evaluate_style_consistency", return_value=None):
+        results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas_import")
 
     assert len(results) == 3
     for r in results:
         assert r["faithfulness"] is None
         assert r["context_precision"] is None
-        # 规则近似指标照常
-        assert r["answer_compliance"] == 0.8
+        # 自研 judge 指标照常（Ragas 失败不中断评估）
+        assert abs(r["answer_compliance"] - 0.9) < 1e-6
         assert r["refusal_appropriateness"] == 1.0
     rows = asyncio.run(_fetch_eval_rows("run_no_ragas_import"))
     assert len(rows) == 3
@@ -234,13 +240,15 @@ def test_run_comparison_ragas_unavailable_yields_none(tmp_path):
     """无 LLM judge（_try_ragas_score 返回 None）→ Ragas 指标为 None，评估不中断"""
     _init_sqlite(tmp_path)
     service = FakeChatService()
-    with patch("eval.runner._try_ragas_score", return_value=None):
+    with patch("eval.runner._try_ragas_score", return_value=None), \
+         patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
+         patch("eval.runner._evaluate_style_consistency", return_value=None):
         results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas")
     assert len(results) == 3
     assert all(r["faithfulness"] is None for r in results)
     assert all(r["context_precision"] is None for r in results)
-    # 规则近似指标仍然可用
-    assert all(r["answer_compliance"] == 0.8 for r in results)
+    # 自研 judge 指标仍然可用
+    assert all(abs(r["answer_compliance"] - 0.9) < 1e-6 for r in results)
     assert all(r["refusal_appropriateness"] == 1.0 for r in results)
 
 
