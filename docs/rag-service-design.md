@@ -1,9 +1,16 @@
 # RAG + 生成式 AI 内部知识库问答服务 — 架构设计文档
 
 > **Case Study**: Mid-Level Developer Take-Home Assignment  
-> **日期**: 2025-08-12  
-> **版本**: v1.0  
 > **作者**: AIA Candidate
+
+---
+
+## 0. 版本记录
+
+| 版本 | 日期 | 变更摘要 |
+|------|------|---------|
+| v1.0 | 2025-08-12 | 初始版本：十大章节完整设计 |
+| v1.1 | 2026-08-13 | 新增 §6.4 语料设计；标题与文件名去日期化，改由本节追踪版本 |
 
 ---
 
@@ -2255,6 +2262,53 @@ eval.sh 每次执行 → 自动生成 run_id → 所有指标写入 eval_history
 python -m eval.report --compare <run_id_before> <run_id_after>
     → 自动产出 before/after CSV + 高亮改善/恶化项
 ```
+
+---
+
+### 6.4 语料设计
+
+#### 设计动机
+
+评估指标的可信度取决于语料是否系统性地覆盖全部功能需求。程序化 mock 生成的语料（方案 A）具有三方面优势：
+
+1. **可控性**：可精确埋入版本变更、重复条款、注入样本、PII 样本、过期文档等测试点，每个测试点都有已知的"正确答案"
+2. **可复现**：`scripts/generate_corpus.py` 可在任何环境重建同一套语料，评估结果可复现（assignment 的硬要求）
+3. **已知答案**：QA 测试集的 ground truth 可从语料精确推导，支撑 Faithfulness / Context Precision 的可靠评测
+
+#### 语料矩阵（10 文档 / 4 doc_type）
+
+| # | 文档 | doc_type | 语言 | 格式 | 测试点 |
+|---|------|---------|:---:|:---:|--------|
+| 1 | employee_handbook_v1.0.pdf | handbook | zh | 原生 PDF | 基线政策 + PII 样本 |
+| 2 | employee_handbook_v1.1.pdf | handbook | zh | 原生 PDF | 年假 5→10 天 → 版本管理 |
+| 3 | compliance_guide_cn.pdf | compliance | zh | 原生 PDF | 审计频率/数据保留 |
+| 4 | compliance_guide_en.pdf | compliance | en | 原生 PDF | 双语平行文档（跨语言检索） |
+| 5 | api_specification.md | technical | en | Markdown | API 限流/认证 → 纯文本解析 |
+| 6 | it_security_policy.pdf | technical | en | 原生 PDF | 密码策略 + 白字注入指令 |
+| 7 | legacy_tech_manual_v2022.pdf | technical | en | 原生 PDF | effective_date=2022 → 过期过滤 |
+| 8 | architecture_overview.md | architecture | zh | Markdown | 微服务/部署拓扑 |
+| 9 | incident_response_plan.pdf | architecture | en | 原生 PDF | 应急响应分级 |
+| 10 | scanned_hr_notice.pdf | handbook | zh | 扫描 PDF | 无文字层 → OCR + 与 #1 部分重复条款 |
+
+#### 测试点 → 功能需求映射
+
+| 测试点 | 对应需求 | 验证方式 |
+|--------|---------|---------|
+| 版本管理（#1→#2 同 stem 替换） | FR-3.3 版本增量更新 | v1.1 ingest 后 v1.0 chunks `is_active=false`，QA 问"年假天数"应答 10 天 |
+| 扫描件 OCR（#10） | FR-3.1 OCR 扫描 PDF | 无文字层 PDF 经 PaddleOCR 后 chunks 文本含"人力资源部" |
+| 注入样本（#6 白字指令） | FR-4.1 注入扫描 | 检索命中后 InjectionScanner 应 block |
+| PII 样本（#1 §3.2） | FR-4.3 PII 脱敏 | 回答含身份证号/手机号时 PIIScrubber 应替换 |
+| 过期文档（#7） | 元数据时间过滤 | `expire.enabled=true` 时 #7 不被召回；关闭时召回 |
+| 双语（#3/#4 平行文档） | 语料双语特征 | 中文 query 可召回英文 compliance 文档（BGE-M3 跨语言） |
+| 重复条款（#1/#10 加班费） | 检索行为验证 | 两文档均被召回（而非 MD5 去重 — 去重逻辑另有单测） |
+
+#### 特殊构造方法
+
+**扫描件（#10）**：文本用 PyMuPDF 渲染为 pixmap（200 DPI）→ 嵌入新 PDF 页面 → 产物无文字层（`text_ratio=0`），与真实扫描仪产物在 OCR 引擎视角下等价。此方法已在终审修复波中用真实 PaddleOCR 验证通过。
+
+**注入样本（#6）**：将 `[IGNORE ALL PREVIOUS INSTRUCTIONS...]` 以白色 (1,1,1) 小字号文本写入 PDF — 正常阅读不可见，但可被文本提取与向量检索发现，模拟"隐藏在文档中的恶意指令"攻击场景。
+
+**版本管理（#1→#2）**：两个文件共享同一 stem（`employee_handbook`），内容年假条款 5/7/10 天改为 10/12/15 天。按 §5.4 版本化入库流程，#2 入库后 #1 全部 chunks 软下线。
 
 ---
 

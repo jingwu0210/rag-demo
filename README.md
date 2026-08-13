@@ -5,8 +5,15 @@
 ## 快速开始
 
 ```bash
-./run.sh        # 启动服务 (http://localhost:8000)
-./eval.sh       # 一键评估（三配置对比 + 报表）
+# 前提：设置 DeepSeek API Key（用于 LLM 生成）
+export DEEPSEEK_API_KEY=<your-key>
+
+./run.sh        # 一键启动 (http://localhost:8000)
+                # 首次运行自动完成：依赖安装 → 语料生成 → 入库（下载 BGE-M3 模型）
+                # 再次运行检测到知识库非空，跳过引导直接启动
+                # NO_BOOTSTRAP=1 ./run.sh 强制跳过引导
+
+./eval.sh       # 一键评估（三配置对比 + 报表 → data/eval/results/）
 ```
 
 ## API 端点
@@ -19,6 +26,12 @@
 | GET /eval/result | 查询评估结果（?run_id=；缺省返回最近一次） |
 | GET /report | 运营报表（request_metrics 聚合 CSV） |
 | GET /health | 健康检查 |
+
+## 语料与数据
+
+- 语料生成: `.venv/bin/python scripts/generate_corpus.py` → `data/corpus/`（10 文档，见设计文档 §6.4）
+- 语料入库: `HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py`
+- 入库验证: `.venv/bin/python scripts/verify_corpus.py`
 
 ## 架构
 
@@ -34,5 +47,5 @@
 
 ## 文档
 
-- 架构设计: docs/2025-08-12-rag-service-design.md
+- 架构设计: docs/rag-service-design.md
 - 实施计划: docs/2025-08-12-rag-service-plan.md

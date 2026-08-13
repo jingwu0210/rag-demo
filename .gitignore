@@ -14,9 +14,13 @@ data/ocr/*
 data/logs/*
 data/eval/results/*
 data/cache.db
+data/cache.db-shm
+data/cache.db-wal
 !data/**/.gitkeep
 
 # 环境
 .env
 .DS_Store
 .superpowers/
+# Assignment 原始文件（不入库）
+Asst Manager*.docx
