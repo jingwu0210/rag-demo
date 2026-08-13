@@ -15,10 +15,17 @@ async def init_db() -> None:
         CREATE TABLE IF NOT EXISTS cache_entries (
             cache_key TEXT PRIMARY KEY, query TEXT NOT NULL, answer TEXT NOT NULL,
             sources_json TEXT, token_usage INTEGER, retrieval_mode TEXT,
+            refused BOOLEAN DEFAULT FALSE, refusal_reason TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     await db.execute("CREATE INDEX IF NOT EXISTS idx_cache_created ON cache_entries(created_at)")
+    # 迁移：旧库（无 refused/refusal_reason 列）补列，幂等
+    try:
+        await db.execute("ALTER TABLE cache_entries ADD COLUMN refused BOOLEAN DEFAULT FALSE")
+        await db.execute("ALTER TABLE cache_entries ADD COLUMN refusal_reason TEXT")
+    except Exception:
+        pass  # 列已存在（新库 CREATE 已含）
 
     await db.execute("""
         CREATE TABLE IF NOT EXISTS request_metrics (

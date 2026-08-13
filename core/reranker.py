@@ -91,6 +91,10 @@ class Reranker:
             )
         return self.model
 
+    def ensure_loaded(self) -> None:
+        """预热模型（首次加载耗时 >2s，须在阶段超时保护外调用）"""
+        self._ensure_model()
+
     def rerank(self, query: str, candidates: List[ScoredDoc]) -> List[ScoredDoc]:
         if not candidates:
             return []

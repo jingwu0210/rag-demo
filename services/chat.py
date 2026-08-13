@@ -83,13 +83,10 @@ class ChatService:
 
         # 5. 检索（阶段超时 → 空 docs 继续，触发低置信拒答）
         timeout = False
-        retrieval_output = None
-        try:
-            retrieval_output = await self.guard.with_stage_timeout(
-                "retrieval", self.retrieval.retrieve(query, doc_type))
-        except StageTimeoutError:
-            timeout = True
-            logger.warning("chat_retrieval_timeout", query=query)
+        # 检索不做外层阶段超时：RetrievalService 内部已有检索 3s / 重排 2s 分阶段超时，
+        # 且首次 rerank 预热（模型加载 ~3.4s）发生在内部超时之外。
+        # 外层 3s 包裹会误杀含预热的首个请求（smoke 实测）；总预算由 API 层 9s 硬超时兜底。
+        retrieval_output = await self.retrieval.retrieve(query, doc_type)
         docs = retrieval_output.docs if retrieval_output else []
         degraded = retrieval_output.degraded if retrieval_output else False
         injection_blocked = retrieval_output.injection_blocked if retrieval_output else 0
@@ -110,7 +107,8 @@ class ChatService:
 
         # 8. 后处理（生成超时的系统降级话术不经过拒答/脱敏）
         if gen_result is not None:
-            pp = self.postprocessor.process(gen_result.text, query, retrieval_output)
+            pp = self.postprocessor.process(gen_result.text, query, retrieval_output,
+                                            mode=getattr(retrieval_output, "mode", None))
             answer = pp.answer
             refused = pp.refused
             refusal_reason = pp.refusal_reason
@@ -145,7 +143,8 @@ class ChatService:
 
         # 9. 持久化：写缓存（未命中且非降级话术）→ turns → request_metrics
         if cache_enabled and not partial:
-            await self.cache.put(query, mode, answer, sources, tokens.get("total", 0))
+            await self.cache.put(query, mode, answer, sources, tokens.get("total", 0),
+                                 refused=refused, refusal_reason=refusal_reason)
         request_id = uuid.uuid4().hex
         await self._save_turn(
             session_id=session_id, raw_query=query, resolved_query=query,
@@ -182,7 +181,7 @@ class ChatService:
         await self._save_metrics(
             request_id=request_id, session_id=session_id or "",
             timing_ms=timing, token_usage=tokens, retrieval_mode=retrieval_mode,
-            cache_hit=True, refused=False, refusal_reason=None,
+            cache_hit=True, refused=cached.refused, refusal_reason=cached.refusal_reason,
             timeout=False, degraded=False, pii_redact_count=0, injection_blocked=0,
         )
         return ChatResponse(
@@ -191,6 +190,8 @@ class ChatService:
             sources=list(cached.sources),
             timing_ms=timing,
             token_usage=tokens,
+            refused=cached.refused,
+            refusal_reason=cached.refusal_reason,
             from_cache=True,
         )
 
