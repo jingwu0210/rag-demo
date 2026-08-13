@@ -332,7 +332,7 @@ def test_chat_service_full_flow(tmp_path):
     assert resp.timing_ms["total"] >= 0
     assert resp.token_usage == {"prompt": 10, "completion": 20, "total": 30}
     assert resp.refused is False and resp.from_cache is False and resp.partial is False
-    deps["retrieval"].retrieve.assert_awaited_with("年假有几天？", "handbook")
+    deps["retrieval"].retrieve.assert_awaited_with("年假有几天？", "general")  # v1.6: classify 恒 general
     deps["cache"].put.assert_awaited_once()
 
     # ── SQLite 持久化真实验证（tempfile）──

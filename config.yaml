@@ -165,26 +165,24 @@ chromadb:
   collection_name: knowledge_base
   distance_metric: cosine
 
-# ── 文档类型（metadata filter 白名单）─────────────────────
+# ── 文档类型（metadata 标记值域 — v1.6 起不作检索过滤）─────────────────
+# 检索全库不过滤（关键词分类不可维护且会误路由，评估实测）；doc_type 仅存
+# 于 chunk metadata 供评估分析。扩展点：语料规模增大需范围收敛时重新引入分类。
 doc_types:
   handbook:
     doc_type:
       - handbook
-    keywords: [年假, 病假, 工资, 福利, 加班, leave, salary, benefit]
   compliance:
     doc_type:
       - compliance
       - handbook
-    keywords: [合规, 审计, 法规, 安全, compliance, audit, regulation]
   technical:
     doc_type:
       - technical
       - architecture
-    keywords: [API, 架构, 数据库, 接口, architecture, database]
   architecture:
     doc_type:
       - architecture
-    keywords: [部署, 拓扑, 微服务, 容器, deploy, microservice, container]
 
 # ── 日志 ──────────────────────────────────────────────────
 logging:

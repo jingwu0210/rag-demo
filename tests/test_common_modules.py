@@ -13,20 +13,22 @@ def test_bilingual_tag_chunks():
     assert tagged[0]["language"] == "zh"
     assert tagged[1]["language"] == "en"
 
-def test_metadata_filter_classify():
+def test_metadata_filter_classify_v16_always_general():
+    """v1.6: 关键词分类删除（不可维护且误路由）→ classify 恒返回 general（全库检索）"""
     from core.config import ConfigRegistry
     from core.metadata import MetadataFilter
     ConfigRegistry.init("config.yaml")
-    assert MetadataFilter.classify("年假怎么算") == "handbook"
-    assert MetadataFilter.classify("合规要求是什么") == "compliance"
-    assert MetadataFilter.classify("API 架构") == "technical"
-    assert MetadataFilter.classify("今天天气如何") == "general"
+    assert MetadataFilter.classify("年假怎么算") == "general"
+    assert MetadataFilter.classify("合规要求是什么") == "general"
+    assert MetadataFilter.classify("API 架构") == "general"
+    assert MetadataFilter.classify("IT 安全策略中密码要求") == "general"  # 原误路由场景
 
-def test_metadata_filter_get_doc_types():
+def test_metadata_filter_get_doc_types_v16_always_empty():
+    """v1.6: doc_type 过滤删除 → get_doc_types 恒返回空列表"""
     from core.config import ConfigRegistry
     from core.metadata import MetadataFilter
     ConfigRegistry.init("config.yaml")
-    assert MetadataFilter.get_doc_types("handbook") == ["handbook"]
+    assert MetadataFilter.get_doc_types("handbook") == []
     assert MetadataFilter.get_doc_types("general") == []
 
 def test_expire_filter_disabled_by_default():
