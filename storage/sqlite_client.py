@@ -83,14 +83,21 @@ async def init_db() -> None:
             p50_latency_ms INTEGER, p95_latency_ms INTEGER, avg_tokens_per_call INTEGER,
             total_pii_redactions INTEGER DEFAULT 0, total_injections_blocked INTEGER DEFAULT 0,
             timeout_rate REAL DEFAULT 0,
+            avg_prompt_tokens INTEGER DEFAULT 0,
+            avg_completion_tokens INTEGER DEFAULT 0,
+            avg_chunks_per_call REAL DEFAULT 0,
             per_qa_results_json TEXT,
             PRIMARY KEY (run_id, config_name)
         )
     """)
-    try:
-        await db.execute("ALTER TABLE eval_history ADD COLUMN timeout_rate REAL DEFAULT 0")
-    except Exception:
-        pass  # 列已存在
+    for col_ddl in ("ALTER TABLE eval_history ADD COLUMN timeout_rate REAL DEFAULT 0",
+                    "ALTER TABLE eval_history ADD COLUMN avg_prompt_tokens INTEGER DEFAULT 0",
+                    "ALTER TABLE eval_history ADD COLUMN avg_completion_tokens INTEGER DEFAULT 0",
+                    "ALTER TABLE eval_history ADD COLUMN avg_chunks_per_call REAL DEFAULT 0"):
+        try:
+            await db.execute(col_ddl)
+        except Exception:
+            pass  # 列已存在
     await db.execute("CREATE INDEX IF NOT EXISTS idx_eval_history_ts ON eval_history(timestamp)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_eval_history_config ON eval_history(config_name)")
 

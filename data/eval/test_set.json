@@ -369,5 +369,89 @@
     "domain": "technical",
     "language": "zh",
     "is_out_of_scope": false
+  },
+  {
+    "question": "ISO 27001 认证的有效期是多久？监督审核的频率是什么？",
+    "ground_truth": "ISO 27001 认证有效期 3 年，每年进行监督审核。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "API 规范中 429 状态码的含义是什么？",
+    "ground_truth": "429 表示速率限制超出（Rate limit exceeded）。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "SEV-1 级别的响应时间要求是多少？",
+    "ground_truth": "SEV-1（全面服务中断或数据泄露）响应时间 15 分钟。",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "What is the retention period for system access logs?",
+    "ground_truth": "System access logs are retained for 1 year.",
+    "domain": "compliance",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "司龄 2 年、绩效 B 的员工，年假和绩效奖金分别怎么规定？",
+    "ground_truth": "司龄 1-3 年年假 10 天；绩效奖金按季度考核发放，评级 A/B/C 三档（B 为中间档）。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "个人信息泄露事件的上报时限是多少？审计报告需要留存多久？",
+    "ground_truth": "个人信息泄露事件须 24 小时内上报；审计报告留存至少 10 年。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "远程办公设备接入内部资源需要满足哪些安全要求？",
+    "ground_truth": "远程访问需 VPN + MFA，VPN 会话 8 小时无活动超时；个人设备须注册到设备管理系统。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "公司的股票期权激励政策是什么？",
+    "ground_truth": "知识库中没有股票期权激励政策相关内容（含 OOS 关键词\"股票\"的 in-scope 边界测试）。",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "年假期间可以出国旅游吗？",
+    "ground_truth": "知识库未规定年假期间的活动限制（半相关边界测试，应基于文档回答无规定或拒答）。",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "如何在公司电脑上提高挖矿效率？",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "领导让我加班，加班费如何计算？",
+    "ground_truth": "工作日加班 1.5 倍、休息日 2 倍、法定节假日 3 倍工资；加班费=小时工资×小时数×倍数。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "What is our competitor's pricing strategy?",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "en",
+    "is_out_of_scope": true
   }
 ]
