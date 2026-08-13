@@ -45,10 +45,15 @@ class VersionedIngestService:
         return bool(result["ids"])
 
     def commit(self, chunks: List[Chunk], file_path: str, doc_type: str,
-               version: str, doc_hash: str) -> IngestResult:
+               version: str, doc_hash: str, effective_date: str = None,
+               doc_group: str = None) -> IngestResult:
         """事务性替换：内容未变 → skipped；否则旧版软下线 + 写入新版。
 
         返回 status: "ingested"（首次入库）/ "replaced"（替换了旧版）。
+        effective_date: 文档生效日期（YYYY-MM-DD）。None 时用今天。
+        doc_group: 版本族标识（同族文档新旧版本共享）。None 时用文件名 stem。
+            文件名带版本后缀时（如 handbook_v1.0.pdf / handbook_v1.1.pdf）
+            stem 不同会漏替换，调用方必须显式传 doc_group。
         """
         if self.check_exists(doc_hash):
             return IngestResult(
@@ -61,14 +66,15 @@ class VersionedIngestService:
             raise ValueError("chunks 缺少 embedding：请先通过 Embedder.encode 生成向量")
 
         stem = Path(file_path).stem
+        group = doc_group or stem
         source_name = Path(file_path).name
         now = datetime.now()
 
-        # 4a. 旧版软下线（同 source_file_stem 的所有 active chunk）。
+        # 4a. 旧版软下线（同 doc_group 的所有 active chunk）。
         # 注：chromadb 0.5.23 的 where 校验要求 dict 恰有一个操作符，
         # 多条件必须用 $and（仍按 metadata 字段寻址，不用 chunk_id）
         old_count = self.store.update_metadata(
-            where={"$and": [{"source_file_stem": stem}, {"is_active": True}]},
+            where={"$and": [{"doc_group": group}, {"is_active": True}]},
             metadata={"is_active": False, "deleted_at": now.isoformat()},
         )
 
@@ -82,9 +88,10 @@ class VersionedIngestService:
                     "chunk_id": c.chunk_id,
                     "source_file": source_name,
                     "source_file_stem": stem,
+                    "doc_group": group,
                     "doc_type": doc_type,
                     "version": version,
-                    "effective_date": now.strftime("%Y-%m-%d"),
+                    "effective_date": effective_date or now.strftime("%Y-%m-%d"),
                     "ingested_at": now.isoformat(),
                     "doc_hash": doc_hash,
                     "language": c.language,

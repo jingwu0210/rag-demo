@@ -85,7 +85,8 @@ class IngestService:
             await db.close()
         await self.cache.invalidate_all()
 
-    def ingest(self, file_path: str, doc_type: str, version: str = "v1.0") -> IngestResult:
+    def ingest(self, file_path: str, doc_type: str, version: str = "v1.0",
+               effective_date: str = None, doc_group: str = None) -> IngestResult:
         versioned = self._get_versioned()
 
         # 1. SHA-256 指纹查重：同内容且生效 → skipped 早退
@@ -115,7 +116,8 @@ class IngestService:
                 c.embedding = vec.tolist() if hasattr(vec, "tolist") else vec
 
         # 7. 版本化入库（软下线旧版 + 写入新版）
-        result = versioned.commit(chunks, file_path, doc_type, version, doc_hash)
+        result = versioned.commit(chunks, file_path, doc_type, version, doc_hash,
+                                  effective_date=effective_date, doc_group=doc_group)
 
         # 8. 冲突检测：同 heading_path 不同文本 → warning 日志
         if result.status in ("ingested", "replaced"):

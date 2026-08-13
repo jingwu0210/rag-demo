@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+from pathlib import Path
 
 import fitz  # PyMuPDF
 from core.config import ConfigRegistry
@@ -18,6 +19,24 @@ class OCRPipeline:
     """PDF 解析 + OCR。扫描件检测：逐页 text_ratio < 1% 视为扫描页，走 PaddleOCR。"""
 
     def process(self, file_path: str) -> ParsedDoc:
+        ext = Path(file_path).suffix.lower()
+        if ext in (".md", ".txt"):
+            return self._process_text_file(file_path)
+        return self._process_pdf(file_path)
+
+    def _process_text_file(self, file_path: str) -> ParsedDoc:
+        """纯文本文件（.md/.txt）：直接读取 + 复用 PDF 路径的清洗逻辑"""
+        clean_cfg = ConfigRegistry.get("ocr.clean", {})
+        with open(file_path, "r", encoding="utf-8") as f:
+            text = f.read()
+        if clean_cfg.get("normalize_whitespace", True):
+            text = self._normalize_whitespace(text)
+        if clean_cfg.get("fix_cn_en_spacing", True):
+            text = self._fix_cn_en_spacing(text)
+        return ParsedDoc(text=text, pages=[{"num": 0, "text": text}], tables=[],
+                         source=file_path, language=BilingualHandler.detect(text))
+
+    def _process_pdf(self, file_path: str) -> ParsedDoc:
         doc = fitz.open(file_path)
         all_text, pages_data, tables_data = [], [], []
         need_ocr = ConfigRegistry.get("ocr.engine", "paddleocr")
@@ -27,9 +46,11 @@ class OCRPipeline:
 
         for page_num, page in enumerate(doc):
             text = page.get_text("text")
-            text_ratio = len(text.strip()) / max(page.rect.width * page.rect.height, 1)
-
-            if text_ratio < 0.01 and need_ocr:
+            # 扫描件判定：按绝对字符数，不用字符数/像素面积比率。
+            # 比率量纲错误（A4 页 50 万像素，正常文本页 500-1000 字符 → 比率恒 < 0.01，
+            # 会把所有文本页误判为扫描件走 OCR，且 OCR 看不见白底白字的注入样本）
+            char_count = len(text.strip())
+            if char_count < 20 and need_ocr:
                 text = self._ocr_page(page, page_num, doc_tag)
             else:
                 text = self._extract_native(page)

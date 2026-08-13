@@ -301,3 +301,91 @@ def test_ocr_native_pdf_extraction(tmp_path):
     assert parsed.language == "en"
 
     ConfigRegistry.override("ocr.engine", "paddleocr")  # 恢复，避免污染其他测试
+
+
+def test_ocr_markdown_file_parsing(tmp_path):
+    """Phase 11: .md 文件走纯文本路径（不触发 fitz PDF 解析）"""
+    md_path = os.path.join(str(tmp_path), "api_spec.md")
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write("# API Specification\n\nRate limit: 1000 requests per minute.\n")
+
+    parsed = OCRPipeline().process(md_path)
+    assert "API Specification" in parsed.text
+    assert "1000 requests" in parsed.text
+    assert parsed.source == md_path
+    assert parsed.language == "en"
+
+
+def test_versioned_commit_custom_effective_date(tmp_path):
+    """Phase 11: commit 支持显式 effective_date（过期文档埋点用）"""
+    ConfigRegistry.init("config.yaml")
+    ConfigRegistry.override("chromadb.persist_directory", str(tmp_path))
+    store = ChromaStore()
+    svc = VersionedIngestService(store)
+
+    file_path = os.path.join(str(tmp_path), "legacy.txt")
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("legacy manual")
+    h = svc.compute_hash(file_path)
+    chunks = [_chunk("c1", "legacy 正文", "遗留手册", source="legacy.txt",
+                     embedding=[0.1] * 16)]
+    res = svc.commit(chunks, file_path, "technical", "v1.0", h,
+                     effective_date="2022-01-01")
+    assert res.status == "ingested"
+
+    items = store.collection.get(where={"chunk_id": "c1"})
+    assert items["metadatas"][0]["effective_date"] == "2022-01-01"
+
+
+def test_versioned_doc_group_replaces_different_stems(tmp_path):
+    """Phase 11 回归: 文件名带版本后缀（stem 不同）时靠 doc_group 替换旧版"""
+    ConfigRegistry.init("config.yaml")
+    ConfigRegistry.override("chromadb.persist_directory", str(tmp_path))
+    store = ChromaStore()
+    svc = VersionedIngestService(store)
+
+    f1 = os.path.join(str(tmp_path), "handbook_v1.0.txt")
+    with open(f1, "w", encoding="utf-8") as f:
+        f.write("年假 5 天")
+    h1 = svc.compute_hash(f1)
+    res1 = svc.commit([_chunk("c1", "年假 5 天", "员工手册", source="handbook_v1.0.txt",
+                              embedding=[0.1] * 16)],
+                      f1, "handbook", "v1.0", h1, doc_group="employee_handbook")
+    assert res1.status == "ingested"
+
+    f2 = os.path.join(str(tmp_path), "handbook_v1.1.txt")
+    with open(f2, "w", encoding="utf-8") as f:
+        f.write("年假 10 天")
+    h2 = svc.compute_hash(f2)
+    res2 = svc.commit([_chunk("c2", "年假 10 天", "员工手册", source="handbook_v1.1.txt",
+                              embedding=[0.1] * 16)],
+                      f2, "handbook", "v1.1", h2, doc_group="employee_handbook")
+    assert res2.status == "replaced"
+    assert res2.chunks_replaced == 1
+
+    items = store.collection.get(where={"doc_group": "employee_handbook"})
+    by_id = {m["chunk_id"]: m for m in items["metadatas"]}
+    assert by_id["c1"]["is_active"] is False   # 旧版软下线
+    assert by_id["c2"]["is_active"] is True    # 新版生效
+    assert by_id["c2"]["source_file_stem"] == "handbook_v1.1"  # stem 保留真实值
+    assert by_id["c2"]["doc_group"] == "employee_handbook"
+
+
+def test_ocr_text_page_not_misclassified_as_scanned(tmp_path):
+    """Phase 11 回归: 正常文本页（~100 字符）不得误判为扫描件走 OCR 路径"""
+    import fitz
+
+    ConfigRegistry.init("config.yaml")
+    pdf_path = os.path.join(str(tmp_path), "text_page.pdf")
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 72), "Normal text page with enough characters to be native text.",
+                     fontsize=11)
+    doc.save(pdf_path)
+    doc.close()
+
+    # 构造一个 OCR 路径会失败的引擎名：若走 OCR 会抛 ImportError，走原生则正常
+    ConfigRegistry.override("ocr.engine", "nonexistent-engine")
+    parsed = OCRPipeline().process(pdf_path)
+    assert "Normal text page" in parsed.text
+    ConfigRegistry.override("ocr.engine", "paddleocr")  # 恢复
