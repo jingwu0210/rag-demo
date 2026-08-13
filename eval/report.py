@@ -29,7 +29,7 @@ logger = get_logger(module="eval.report")
 CSV_COLUMNS = ["config", "faithfulness", "context_precision", "answer_compliance",
                "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
                "avg_tokens", "avg_prompt_tokens", "avg_completion_tokens",
-               "avg_chunks", "timeout_rate", "total_requests"]
+               "avg_chunks", "timeout_rate", "unanswered_rate", "total_requests"]
 
 # CSV 列 → results dict 键（run_comparison 聚合结果）
 _COLUMN_KEY = {
@@ -46,6 +46,7 @@ _COLUMN_KEY = {
     "avg_completion_tokens": "avg_completion_tokens",
     "avg_chunks": "avg_chunks_per_call",
     "timeout_rate": "timeout_rate",
+    "unanswered_rate": "unanswered_rate",
     "total_requests": "total_requests",
 }
 
@@ -63,6 +64,7 @@ _METRIC_DIRECTION = {
     "avg_tokens_per_call": "lower",
     "avg_prompt_tokens": "lower", "avg_completion_tokens": "lower",
     "avg_chunks_per_call": "lower", "timeout_rate": "lower",
+    "unanswered_rate": "lower",
 }
 
 _METRIC_LABEL = {
@@ -75,6 +77,7 @@ _METRIC_LABEL = {
     "avg_completion_tokens": "Avg Completion Tokens",
     "avg_chunks_per_call": "Avg Chunks/Call",
     "timeout_rate": "Timeout Rate",
+    "unanswered_rate": "Unanswered Rate",
 }
 
 
@@ -108,9 +111,11 @@ def generate_report(results: List[dict], output_dir: str) -> str:
 
 def _write_markdown(results: List[dict], md_path: str) -> None:
     lines = ["# RAG Evaluation Report", "",
-             "> 说明：faithfulness / context_precision 为 Ragas LLM judge 指标，",
-             "> 无 LLM judge 可用（无 DEEPSEEK_API_KEY 或网络不可达）时为 None，报告按近似看待；",
-             "> answer_compliance 为规则近似值（answer 非空 且 未拒答 且 命中缓存或检索到 sources）。",
+             "> 指标语义（v1.4+）：faithfulness / context_precision 为 Ragas LLM judge；",
+             "> answer_compliance 为自研 LLM judge 6 档制（0=未回答问题，1-5 合规度），",
+             "> 0 分样本计入 unanswered_rate 且排除出 compliance 均值；",
+             "> style_consistency 为 vs 风格规范绝对打分（全量答案）；",
+             "> refusal_appropriateness 为纯规则四场景判定。",
              "",
              "| Config | Faithfulness | Context Precision | Answer Compliance | "
              "Refusal Appropriateness | Style Consistency | P50 (ms) | P95 (ms) | Avg Tokens | Requests |",

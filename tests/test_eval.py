@@ -309,7 +309,7 @@ def test_generate_report_writes_csv_and_markdown(tmp_path):
     assert rows[0] == ["config", "faithfulness", "context_precision", "answer_compliance",
                        "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
                        "avg_tokens", "avg_prompt_tokens", "avg_completion_tokens",
-                       "avg_chunks", "timeout_rate", "total_requests"]
+                       "avg_chunks", "timeout_rate", "unanswered_rate", "total_requests"]
     assert len(rows) == 4  # header + 3 config
     configs = {row[0] for row in rows[1:]}
     assert configs == {"vector-only", "hybrid", "hybrid+rerank"}
