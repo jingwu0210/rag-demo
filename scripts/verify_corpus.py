@@ -27,10 +27,16 @@ def main():
     v11 = store.collection.get(where={"$and": [
         {"doc_group": "employee_handbook"}, {"version": "v1.1"}]})
     v10_all_inactive = all(not m.get("is_active") for m in (v10["metadatas"] or [])) and len(v10["ids"]) > 0
-    v11_all_active = all(m.get("is_active") for m in (v11["metadatas"] or [])) and len(v11["ids"]) > 0
+    # 版本管理正确语义：最新版本的 chunk active；历史多轮 replaced 的旧 v1.1
+    # 应是 inactive（断言"存在 active 的 v1.1"而非"所有 v1.1 都 active"）
+    v11_has_active = any(m.get("is_active") for m in (v11["metadatas"] or []))
+    # 全部 active chunks 必须都是 v1.1（最新版本）
+    active_all = [m for m in (store.collection.get(
+        where={"$and": [{"doc_group": "employee_handbook"}, {"is_active": True}]})["metadatas"] or [])]
+    active_only_v11 = all(m.get("version") == "v1.1" for m in active_all) and len(active_all) > 0
     all_pass &= check("版本管理: v1.0 软下线 + v1.1 生效",
-                      v10_all_inactive and v11_all_active,
-                      f"v1.0={len(v10['ids'])} chunks inactive, v1.1={len(v11['ids'])} active")
+                      v10_all_inactive and v11_has_active and active_only_v11,
+                      f"v1.0={len(v10['ids'])} 全 inactive, v1.1 active={len(active_all)}")
 
     # 2. OCR：扫描件 chunks 存在且文本含"人力资源部"
     scanned = store.collection.get(where={"source_file_stem": "scanned_hr_notice"})
