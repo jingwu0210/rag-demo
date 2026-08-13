@@ -264,3 +264,97 @@ def test_retriever_facade_mode_mapping():
             assert result.mode == mode
             assert result.docs
             assert 0 <= result.timing_ms < 10000
+
+
+def test_adaptive_k_mode_aware_threshold():
+    """R2: hybrid 模式用 hybrid_min_score（RRF 尺度），vector-only 用 min_score（余弦尺度）"""
+    from core.config import ConfigRegistry
+    from core.retriever import AdaptiveK, ScoredDoc
+
+    ConfigRegistry.init("config.yaml")
+    # RRF 尺度分数：0.0164（单路 rank1 理论值）及以上应保留
+    rrf_docs = [
+        ScoredDoc(chunk_id="a", text="t", score=0.0328),  # 两路 rank1
+        ScoredDoc(chunk_id="b", text="t", score=0.0164),  # 单路 rank1（边界）
+        ScoredDoc(chunk_id="c", text="t", score=0.0100),  # 单路靠后
+        ScoredDoc(chunk_id="d", text="t", score=0.0050),  # 更弱
+    ]
+    kept = AdaptiveK().apply(rrf_docs, mode="hybrid")
+    kept_ids = {d.chunk_id for d in kept}
+    assert "a" in kept_ids and "b" in kept_ids      # 阈值之上/边界保留
+    assert "c" not in kept_ids and "d" not in kept_ids  # 低于 RRF 尺度阈值被滤
+
+    # vector-only 模式仍用余弦尺度 0.45
+    vec_docs = [
+        ScoredDoc(chunk_id="a", text="t", score=0.80),
+        ScoredDoc(chunk_id="b", text="t", score=0.20),
+    ]
+    kept_vec = AdaptiveK().apply(vec_docs, mode="vector-only")
+    assert [d.chunk_id for d in kept_vec] == ["a"]
+
+    ConfigRegistry.override("retrieval.adaptive.hybrid_min_score", 0.0164)
+
+
+def test_hybrid_retriever_vector_top1_sim_bypass():
+    """R2: HybridRetriever 填充 vector_top1_sim 旁路字段（不参与排序，供 RefusalCheck）"""
+    import tempfile
+    import numpy as np
+    from unittest.mock import MagicMock
+
+    from core.config import ConfigRegistry
+    from core.retriever import HybridRetriever
+    from storage.chroma_client import ChromaStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ConfigRegistry.init("config.yaml")
+        ConfigRegistry.override("chromadb.persist_directory", tmp)
+        store = ChromaStore()
+        store.add(
+            ids=["c1", "c2"],
+            documents=["年假政策文本", "API 规范文本"],
+            embeddings=[[0.9] * 16, [0.1] * 16],
+            metadatas=[
+                {"doc_type": "handbook", "is_active": True, "source_file_stem": "h"},
+                {"doc_type": "technical", "is_active": True, "source_file_stem": "t"},
+            ],
+        )
+        embedder = MagicMock()
+        embedder.encode.return_value = np.array([[0.9] * 16])
+        retriever = HybridRetriever(store, embedder)
+        result = retriever.retrieve("年假", top_k=20)
+        assert result.vector_top1_sim is not None
+        assert 0.0 <= result.vector_top1_sim <= 1.0
+
+
+def test_retriever_facade_skip_adaptive_for_rerank_pool():
+    """R7: skip_adaptive=True 时 hybrid 粗排不截断，完整候选留给 reranker"""
+    import tempfile
+    import numpy as np
+    from unittest.mock import MagicMock
+
+    from core.config import ConfigRegistry
+    from core.retriever import Retriever
+    from storage.chroma_client import ChromaStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ConfigRegistry.init("config.yaml")
+        ConfigRegistry.override("chromadb.persist_directory", tmp)
+        ConfigRegistry.override("retrieval.mode", "hybrid+rerank")
+        store = ChromaStore()
+        # 9 条文档：普通截断（max_chunks=8）和 skip 截断（全 9 条）可区分
+        store.add(
+            ids=[f"c{i}" for i in range(9)],
+            documents=[f"文档内容编号 {i} 年假政策规定" for i in range(9)],
+            embeddings=[[0.5] * 16 for _ in range(9)],
+            metadatas=[{"doc_type": "handbook", "is_active": True,
+                        "source_file_stem": f"doc{i}"} for i in range(9)],
+        )
+        embedder = MagicMock()
+        embedder.encode.return_value = np.array([[0.5] * 16])
+        retriever = Retriever(store, embedder)
+
+        normal = retriever.retrieve("年假", top_k=20)
+        assert len(normal.docs) <= 8  # AdaptiveK max_chunks 截断
+
+        pooled = retriever.retrieve("年假", top_k=20, skip_adaptive=True)
+        assert len(pooled.docs) > len(normal.docs)  # 候选池不截断，更多候选给 rerank

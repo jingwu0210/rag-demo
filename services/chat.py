@@ -129,9 +129,11 @@ class ChatService:
             {"chunk_id": d.chunk_id,
              "heading_path": (d.metadata or {}).get("heading_path", ""),
              "score": d.score,
-             # I-4 终审：携带 chunk 文本（截断前 500 字符防 sources 过大），
-             # 供 eval/runner 以真实文本喂 Ragas judge（heading_path 保真度不足）
-             "text": d.text[:500]}
+             # 携带 chunk 全文供 Ragas judge（R1 修复：500 字符截断会切掉
+             # 英文 chunk 的支撑内容 — 512-token 英文 chunk ≈ 2400 字符）。
+             # chunk 大小由 chunker 构造上限约束（512 tokens），
+             # 最多 8 条 × ~2.4KB ≈ 19KB 响应，可接受。
+             "text": d.text}
             for d in docs
         ]
         timing = {

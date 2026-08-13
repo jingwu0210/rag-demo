@@ -333,3 +333,39 @@ def test_postprocessor_normal_path_redacts_pii():
     assert result.refusal_reason is None
     assert result.answer == "请联系 ***[REDACTED_PHONE]*** 咨询年假事宜"
     assert result.pii_redact_count == 1
+
+
+def test_refusal_hybrid_uses_vector_top1_sim_signal():
+    """R3: hybrid 模式用向量路 top1 余弦旁路信号判 OOS（RRF 分数不可比）"""
+    from core.config import ConfigRegistry
+    from core.postprocess import RefusalCheck
+    from core.retriever import RetrievalResult, ScoredDoc
+
+    ConfigRegistry.init("config.yaml")
+    # hybrid 模式：docs 有内容（RRF 分数 0.03 高排名），但向量路 top1 余弦很低 → 应拒答
+    rr = RetrievalResult(
+        docs=[ScoredDoc(chunk_id="c", text="t", score=0.0328)],
+        mode="hybrid", vector_top1_sim=0.12)
+    refused, reason = RefusalCheck().evaluate("红烧肉怎么做", rr, mode="hybrid")
+    assert (refused, reason) == (True, "low_confidence")
+
+    # 向量路 top1 余弦正常 → 不拒答（尽管 RRF 分数同样 ~0.03）
+    rr2 = RetrievalResult(
+        docs=[ScoredDoc(chunk_id="c", text="t", score=0.0328)],
+        mode="hybrid", vector_top1_sim=0.71)
+    refused2, _ = RefusalCheck().evaluate("年假怎么算", rr2, mode="hybrid")
+    assert refused2 is False
+
+
+def test_refusal_hybrid_missing_bypass_falls_back():
+    """R3: 旁路信号缺失（旧结构/mock）时 hybrid 回退到仅空结果拒答，不误拒"""
+    from core.config import ConfigRegistry
+    from core.postprocess import RefusalCheck
+    from core.retriever import RetrievalResult, ScoredDoc
+
+    ConfigRegistry.init("config.yaml")
+    rr = RetrievalResult(
+        docs=[ScoredDoc(chunk_id="c", text="t", score=0.0328)],
+        mode="hybrid")  # vector_top1_sim=None（默认）
+    refused, _ = RefusalCheck().evaluate("年假怎么算", rr, mode="hybrid")
+    assert refused is False

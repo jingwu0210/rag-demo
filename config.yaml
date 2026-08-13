@@ -49,7 +49,9 @@ retrieval:
     rrf_k: 60
   adaptive:
     enabled: true
-    min_score: 0.45
+    min_score: 0.45                # vector-only 用：余弦相似度阈值（0-1 有绝对语义）
+    hybrid_min_score: 0.0164       # hybrid 用：RRF 尺度阈值 = 单路 rank1 理论值 1/61
+                                   # 语义："至少一路排第一"的 chunk 才保留
     min_chunks: 3
     max_chunks: 8
   metadata_filter:
@@ -122,7 +124,9 @@ refusal:
   enabled: true
   confidence_threshold: 0.45
   rules:
-    out_of_scope_keywords:
+    out_of_scope_keywords:        # 省钱启发式（非防线）：快速拦截明显越界问题。
+                                  # 覆盖不全（黑名单追不上开放域），OOS 判定主力是
+                                  # 置信度信号（vector_top1_sim / 余弦阈值）
       - 股票
       - 天气
       - 电影

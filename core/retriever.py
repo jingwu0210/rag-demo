@@ -31,10 +31,22 @@ class RetrievalResult:
     docs: List[ScoredDoc]
     mode: str                    # "vector-only" | "hybrid" | "hybrid+rerank"
     timing_ms: int = 0
+    # 旁路信号（R2 分数语义契约）：向量路 top1 余弦相似度（0-1，有绝对语义）。
+    # RRF 分数是语料内相对排名，OOS 问题的 top1 RRF 照样高分 → 拦不住 OOS；
+    # 此字段不参与排序，仅供 RefusalCheck 做置信度判定。
+    vector_top1_sim: Optional[float] = None
 
 
 class AdaptiveK:
-    """动态截断：min_score 过滤 + [min_chunks, max_chunks] 截断"""
+    """动态截断：按检索模式区分分数语义（R2 分数语义契约）
+
+    - vector-only: score = 余弦相似度（0-1）→ min_score 绝对阈值有意义
+    - hybrid: score = RRF 排名融合分（~0.016-0.033，实现公式 1/(60+rank)）
+      → min_score（余弦尺度）不可比，改用 hybrid_min_score（RRF 尺度，
+      默认 = 单路 rank1 理论值 1/61 ≈ 0.0164，即"至少一路排第一"才保留）
+    - hybrid+rerank: 粗排阶段由调用方 skip_adaptive 绕过本类（候选留给 rerank），
+      最终 LLM 输入条数由 reranker top_n 决定
+    """
 
     def __init__(self, min_score: Optional[float] = None,
                  min_chunks: Optional[int] = None,
@@ -42,14 +54,16 @@ class AdaptiveK:
         # 未显式传入时默认从 config retrieval.adaptive.* 读取
         self.enabled = ConfigRegistry.get("retrieval.adaptive.enabled", True)
         self.min_score = ConfigRegistry.get("retrieval.adaptive.min_score") if min_score is None else min_score
+        self.hybrid_min_score = ConfigRegistry.get("retrieval.adaptive.hybrid_min_score", 0.0164)
         self.min_chunks = ConfigRegistry.get("retrieval.adaptive.min_chunks") if min_chunks is None else min_chunks
         self.max_chunks = ConfigRegistry.get("retrieval.adaptive.max_chunks") if max_chunks is None else max_chunks
 
-    def apply(self, docs: List[ScoredDoc]) -> List[ScoredDoc]:
+    def apply(self, docs: List[ScoredDoc], mode: str = "vector-only") -> List[ScoredDoc]:
         if not self.enabled or not docs:
             return docs
-        # Step 1: 分数阈值过滤
-        kept = [d for d in docs if self.min_score is None or d.score >= self.min_score]
+        threshold = self.min_score if mode == "vector-only" else self.hybrid_min_score
+        # Step 1: 分数阈值过滤（按模式选择阈值尺度）
+        kept = [d for d in docs if threshold is None or d.score >= threshold]
         # Step 2: 全部低于阈值 → 保底返回前 min_chunks 条
         if not kept and self.min_chunks:
             kept = docs[: self.min_chunks]
@@ -108,11 +122,15 @@ class VectorRetriever(BaseRetriever):
         return self._store.query(vec, n, where)
 
     def retrieve(self, query: str, top_k: int = 20,
-                 doc_type_filter: Optional[str] = None) -> RetrievalResult:
+                 doc_type_filter: Optional[str] = None,
+                 skip_adaptive: bool = False) -> RetrievalResult:
         where = self.build_where(doc_type_filter)
         docs = self._to_scored_docs(self._search(query, top_k, where))
-        docs = self.adaptive.apply(docs)
-        return RetrievalResult(docs=docs, mode="vector-only")
+        vector_top1_sim = float(docs[0].score) if docs else None
+        if not skip_adaptive:
+            docs = self.adaptive.apply(docs, mode="vector-only")
+        return RetrievalResult(docs=docs, mode="vector-only",
+                               vector_top1_sim=vector_top1_sim)
 
 
 class BM25Retriever(BaseRetriever):
@@ -181,7 +199,8 @@ class HybridRetriever(BaseRetriever):
         self._rrf_k = ConfigRegistry.get("retrieval.fusion.rrf_k", 60)
 
     def retrieve(self, query: str, top_k: int = 20,
-                 doc_type_filter: Optional[str] = None) -> RetrievalResult:
+                 doc_type_filter: Optional[str] = None,
+                 skip_adaptive: bool = False) -> RetrievalResult:
         vec_top_k = ConfigRegistry.get("retrieval.vector.top_k", top_k)
         bm25_top_k = ConfigRegistry.get("retrieval.bm25.top_k", top_k)
         where = self.build_where(doc_type_filter)
@@ -191,8 +210,13 @@ class HybridRetriever(BaseRetriever):
         scored = [ScoredDoc(chunk_id=d["chunk_id"], text=d["text"],
                             score=d["rrf_score"], metadata=d.get("metadata", {}))
                   for d in fused[:top_k]]
-        scored = self.adaptive.apply(scored)
-        return RetrievalResult(docs=scored, mode="hybrid")
+        # R2 旁路信号：向量路 top1 余弦分数（0-1），仅供 RefusalCheck 置信度判定
+        vector_top1_sim = (float(vec_docs[0]["score"]) if vec_docs else None)
+        if not skip_adaptive:
+            # hybrid: RRF 尺度阈值（hybrid_min_score），非余弦尺度 min_score
+            scored = self.adaptive.apply(scored, mode="hybrid")
+        return RetrievalResult(docs=scored, mode="hybrid",
+                               vector_top1_sim=vector_top1_sim)
 
 
 class Retriever:
@@ -220,10 +244,16 @@ class Retriever:
         return self._impls[impl_key]
 
     def retrieve(self, query: str, top_k: int = 20,
-                 doc_type_filter: Optional[str] = None) -> RetrievalResult:
+                 doc_type_filter: Optional[str] = None,
+                 skip_adaptive: bool = False) -> RetrievalResult:
         start = time.perf_counter()
         mode = ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
-        result = self._get_impl(mode).retrieve(query, top_k, doc_type_filter)
+        impl = self._get_impl(mode)
+        if skip_adaptive and isinstance(impl, HybridRetriever):
+            # R7: rerank 候选池独立 — 粗排结果不截断，完整候选留给 reranker 精排
+            result = impl.retrieve(query, top_k, doc_type_filter, skip_adaptive=True)
+        else:
+            result = impl.retrieve(query, top_k, doc_type_filter)
         result.timing_ms = int((time.perf_counter() - start) * 1000)
         result.mode = mode  # 门面兜底：结果 mode 与当前配置一致（如 hybrid+rerank）
         return result
