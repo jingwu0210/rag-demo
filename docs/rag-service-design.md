@@ -14,6 +14,8 @@
 | v1.2 | 2026-08-13 | 五大指标完整计算方案落地（§6.3 重写）：Answer Compliance 改自研 LLM judge 5 分制 score/5 均值；Style Consistency 落地 pairwise judge 固定种子；Refusal 四场景纯规则含漏拒；新增 Timeout Rate 附加指标。检索分数语义契约（§4.3 AdaptiveK 按 mode 区分阈值 + hybrid_min_score；§4.6 RefusalCheck OOS 分层重设计 — hybrid 系用 vector_top1_sim 旁路信号）；sources 取消 500 字符截断；rerank 候选池独立（skip_adaptive） |
 | v1.4 | 2026-08-13 | 评估失真五点修复：Style Consistency 重设计（pairwise → vs 风格规范绝对打分，跨配置可比）；测试集 53→65 条（精确术语类/复杂多跳类/边界模糊类三类区分度样本）；Token/Chunk 分解观测（avg_prompt_tokens/avg_completion_tokens/avg_chunks_per_call/timeout_rate 列） |
 | v1.5 | 2026-08-13 | §6.3 新增"评估输出物管理"：三层数据生命周期（eval_history 权威/报表文件时间戳归档/评估档案交付物）；报表固定名覆盖的设计缺陷补记 |
+| v1.6 | 2026-08-13 | 关键词层删除（F1 doc_type 分类 + F2 out_of_scope 黑名单）：静态关键词表不可维护且无法验证正确性，检索全库不过滤、OOS 回归空结果+置信度两层；Compliance judge 6 档制（0=未回答）+ unanswered_rate；语料修复（注入样本独立存放 + 生成器自动换行） |
+| v1.7 | 2026-08-13 | 评估并发化：问答并发 eval.concurrency=5 + Ragas 双指标并行（串行 40 分钟 → 8-10 分钟） |
 | v1.3 | 2026-08-13 | 日志系统升级（§6.2）：JSON 格式头部四字段平铺 + 业务分组嵌套（timestamp 行首）；8 事件正常路径埋点（chat_request_start/cache_check/retrieval_complete/rerank_complete/generation_complete/refusal_triggered/pii_redacted/chat_request_end）；query 截断 200 记录 + answer 预览 200；eval.sh 日志按时间戳独立文件 + stdout/stderr 分流 |
 
 ---
@@ -128,6 +130,10 @@
 - **FR-1.1**：支持至少两种检索模式：vector-only 和 hybrid（向量 + BM25）
 - **FR-1.2**：支持通过配置启用/禁用 Reranker（不修改代码）
 - **FR-1.3**：检索结果支持按 doc_type 元数据过滤，缩小召回范围
+  （v1.6 变更：删除 doc_type 关键词分类 — 静态关键词表不可维护且误路由
+  （评估实测"安全"把 technical 密码问题导向 compliance）；检索全库不过滤，
+  doc_type 仅作 metadata 标记供评估分析。扩展点：语料规模增大需范围收敛时
+  重新引入分类（LLM 分类/加权方案））
 - **FR-1.4**：检索 Top-K 支持自适应阈值动态截断
 
 #### FR-2：问答能力
