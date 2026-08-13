@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import os
+import random
 import time
 import uuid
 from typing import List, Optional
@@ -101,8 +102,15 @@ def _ensure_ragas_llm() -> bool:
 
 
 def _build_ragas_sample(question: str, answer: str, sources: List[dict],
-                        ground_truth: str):
-    """构造 Ragas SingleTurnSample；Ragas 不可导入/构造失败 → None（记日志，不中断评估）。"""
+                        ground_truth: str, is_out_of_scope: bool = False):
+    """构造 Ragas SingleTurnSample；不可构造 → None（记日志，不中断评估）。
+
+    R4: OOS 问题直接返回 None — ground_truth 为空 → reference=None 会让
+    ContextPrecision 抛 KeyError('reference')（评估实测 10 次崩溃）；拒答回答
+    无断言可判，Faithfulness 对 OOS 也无意义。
+    """
+    if is_out_of_scope:
+        return None
     if SingleTurnSample is None:
         logger.info("ragas_skipped", reason="ragas 不可导入")
         return None
@@ -131,6 +139,107 @@ def _try_ragas_score(sample, metric, metric_name: str) -> Optional[float]:
     except Exception as exc:
         logger.warning("ragas_metric_failed", metric=metric_name, error=str(exc))
         return None
+
+
+# ── 自研 LLM judge（Answer Compliance / Style Consistency）──────────────────
+
+COMPLIANCE_JUDGE_PROMPT = """你是合规打分裁判。给定【参考文档片段】和【模型回答】，按5档打分：
+5分：完全依据文档，不添加、不遗漏、不修改任何规则/数字；
+4分：仅极少量无关补充，关键信息完整准确；
+3分：次要信息轻微遗漏，核心规则无错误；
+2分：重要金额、流程、时效遗漏或篡改；
+1分：大量编造内容，核心回答与文档冲突。
+只输出数字分数，不要额外解释。
+
+参考文档：
+{chunks_text}
+
+模型回答：
+{llm_answer}"""
+
+STYLE_JUDGE_PROMPT = """对比两段AI回答的写作风格、正式程度、排版结构、话术规范，打1-5分：
+5=高度统一，4=轻微差异，3=中等差异，2=差异明显，1=完全不同
+仅输出数字。
+
+回答A：
+{ans1}
+
+回答B：
+{ans2}"""
+
+
+def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[int]:
+    """单次 DeepSeek judge 调用 → int 分数；任何失败 → None（不中断评估）。"""
+    import httpx
+    api_key = os.getenv("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        return None
+    base_url = ConfigRegistry.get("llm.base_url", "https://api.deepseek.com/v1")
+    model = ConfigRegistry.get("eval.models.model", "deepseek-chat")
+    try:
+        with httpx.Client(timeout=60) as client:
+            resp = client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"model": model,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "temperature": temperature, "max_tokens": 50})
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"].strip()
+            # 提取第一个整数（兼容 judge 偶发多输出）
+            import re
+            m = re.search(r"\d+", content)
+            if m:
+                score = int(m.group())
+                return min(max(score, 1), 5)
+            logger.warning("judge_unparsable", content=content[:100])
+            return None
+    except Exception as exc:
+        logger.warning("judge_call_failed", error=str(exc))
+        return None
+
+
+async def _judge_batch_async(prompts: List[str], max_concurrency: int = 5) -> List[Optional[int]]:
+    """批量 judge 调用（线程池并发 + 限流）；顺序与输入一致。"""
+    sem = asyncio.Semaphore(max_concurrency)
+
+    async def _one(prompt):
+        async with sem:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _judge_llm_call, prompt)
+
+    return await asyncio.gather(*[_one(p) for p in prompts])
+
+
+def _judge_compliance(answers_chunks: List[tuple]) -> List[Optional[int]]:
+    """Answer Compliance LLM judge（5 分制）。(answer, chunks_text) 批量打分。"""
+    prompts = [COMPLIANCE_JUDGE_PROMPT.format(
+        chunks_text=(chunks_text or "（无检索上下文）")[:4000],
+        llm_answer=answer[:2000]) for answer, chunks_text in answers_chunks]
+    if not prompts:
+        return []
+    return asyncio.run(_judge_batch_async(prompts))
+
+
+def _evaluate_style_consistency(answers: List[str], n_pairs: int = 20, seed: int = 42) -> Optional[float]:
+    """Style Consistency：固定种子抽 N 对 → pairwise 5 分 judge → 均分/5。
+
+    固定种子保证同一测试集每次评估结果完全一致（before/after 可对比）。
+    """
+    answers = [a for a in answers if a and a.strip()]
+    if len(answers) < 2:
+        return None
+    rng = random.Random(seed)
+    # 确定性抽样：从所有组合中固定种子选 n_pairs 对
+    pairs = [(a, b) for i, a in enumerate(answers) for b in answers[i + 1:]]
+    if len(pairs) > n_pairs:
+        pairs = rng.sample(pairs, n_pairs)
+    prompts = [STYLE_JUDGE_PROMPT.format(ans1=a, ans2=b) for a, b in pairs]
+    scores = asyncio.run(_judge_batch_async(prompts))
+    valid = [s for s in scores if s is not None]
+    if not valid:
+        return None
+    return round(sum(valid) / len(valid) / 5, 4)
 
 
 # ── 测试集 hash ─────────────────────────────────────────────
@@ -166,10 +275,13 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
         tokens: List[int] = []
         faithfulness_scores: List[float] = []
         precision_scores: List[float] = []
-        compliance_hits = 0
+        compliance_scores: List[float] = []   # 5 分制原始分（聚合用 /5 均值）
         refusal_hits = 0
+        timeout_count = 0
         total_pii = 0
         total_injections = 0
+        all_answers: List[str] = []
+        compliance_items: List[tuple] = []   # (question, answer, chunks_text) 供自研 judge
 
         for item in test_set:
             question = item["question"]
@@ -185,9 +297,22 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             refused = bool(resp.refused)
             from_cache = bool(resp.from_cache)
             refusal_reason = resp.refusal_reason
+            # R4: 超时检测 — 生成超时/部分返回 或 空回答且非拒答
+            is_timeout = bool(resp.partial) or (
+                not answer and not refused and not from_cache and not sources)
+            if is_timeout:
+                timeout_count += 1
+            all_answers.append(answer)
+            if answer and not refused and not is_timeout:
+                chunks_text = "\n\n---\n\n".join(
+                    (s.get("text") or s.get("heading_path", ""))
+                    for s in sources) if sources else ""
+                compliance_items.append((question, answer, chunks_text))
 
-            # ── LLM judge 指标（Ragas；不可用 → None）──
-            sample = _build_ragas_sample(question, answer, sources, ground_truth)
+            # ── LLM judge 指标（Ragas；OOS/超时 → None 跳过）──
+            sample = _build_ragas_sample(
+                question, answer, sources, ground_truth,
+                is_out_of_scope=is_out_of_scope or is_timeout)
             faithfulness = None
             context_precision = None
             if sample is not None:
@@ -196,11 +321,17 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
                 context_precision = _try_ragas_score(
                     sample, _ragas_context_precision, "context_precision")
 
-            # ── 规则近似指标（无 LLM judge 时的降级定义）──
-            answer_compliance = 1 if (
-                answer and not refused and (from_cache or len(sources) > 0)) else 0
-            refusal_appropriateness = 1 if (
-                (is_out_of_scope and refused) or (not is_out_of_scope and not refused)) else 0
+            # ── 拒答四场景（纯规则，含漏拒检测）──
+            # 正确拒答（OOS 且拒）→ 1；正确作答（非 OOS 未拒且非漏拒）→ 1；
+            # 误拒（非 OOS 拒）→ 0；漏拒（非 OOS 未拒但无 sources 且非缓存）→ 0；OOS 漏拒 → 0
+            if is_out_of_scope:
+                refusal_appropriateness = 1 if refused else 0
+            elif refused:
+                refusal_appropriateness = 0          # 误拒
+            elif not sources and not from_cache and answer:
+                refusal_appropriateness = 0          # 漏拒：无依据仍作答
+            else:
+                refusal_appropriateness = 1          # 正确作答
 
             per_qa.append({
                 "question": question,
@@ -213,9 +344,9 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
                 "sources_count": len(sources),
                 "latency_ms": latency,
                 "tokens_total": token_total,
+                "timeout": is_timeout,
                 "faithfulness": faithfulness,
                 "context_precision": context_precision,
-                "answer_compliance": answer_compliance,
                 "refusal_appropriateness": refusal_appropriateness,
             })
             latencies.append(latency)
@@ -224,8 +355,20 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
                 faithfulness_scores.append(faithfulness)
             if context_precision is not None:
                 precision_scores.append(context_precision)
-            compliance_hits += answer_compliance
             refusal_hits += refusal_appropriateness
+
+        # ── 自研 judge（每配置批量打分）──
+        compliance_raw = _judge_compliance(
+            [(answer, chunks_text) for _, answer, chunks_text in compliance_items])
+        compliance_map = {}  # 按 question 回填 5 分制原始分
+        for (qa, score) in zip(compliance_items, compliance_raw):
+            compliance_map[qa[0]] = score
+        for q in per_qa:
+            q["answer_compliance"] = compliance_map.get(q["question"])
+        compliance_scores = [s for s in compliance_map.values() if s is not None]
+
+        style = _evaluate_style_consistency(
+            [q["answer"] for q in per_qa if q["answer"] and not q["refused"]])
 
         n = max(len(test_set), 1)
         agg = {
@@ -237,12 +380,15 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             "context_precision": _round_mean(precision_scores),
             "context_recall": None,
             "answer_relevancy": None,
-            "answer_compliance": round(compliance_hits / n, 4),
-            "style_consistency": None,
+            # Compliance: score/5 连续分取均值（用户确认：4 分贡献 0.8）
+            "answer_compliance": (_round_mean(compliance_scores) / 5
+                                  if compliance_scores else None),
+            "style_consistency": style,
             "refusal_appropriateness": round(refusal_hits / n, 4),
             "p50_latency_ms": int(np.percentile(latencies, 50)) if latencies else 0,
             "p95_latency_ms": int(np.percentile(latencies, 95)) if latencies else 0,
             "avg_tokens_per_call": int(np.mean(tokens)) if tokens else 0,
+            "timeout_rate": round(timeout_count / n, 4),
             "total_pii_redactions": total_pii,
             "total_injections_blocked": total_injections,
             "per_qa_results_json": json.dumps(per_qa, ensure_ascii=False),
@@ -252,7 +398,9 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
         logger.info("eval_config_done", run_id=run_id, config=mode,
                     answer_compliance=agg["answer_compliance"],
                     refusal_appropriateness=agg["refusal_appropriateness"],
-                    faithfulness=agg["faithfulness"])
+                    faithfulness=agg["faithfulness"],
+                    style_consistency=agg["style_consistency"],
+                    timeout_rate=agg["timeout_rate"])
 
     logger.info("eval_run_done", run_id=run_id, configs=len(results))
     return results
@@ -270,14 +418,16 @@ async def _save_eval_history(agg: dict) -> None:
             "faithfulness, context_precision, context_recall, answer_relevancy, "
             "answer_compliance, style_consistency, refusal_appropriateness, "
             "p50_latency_ms, p95_latency_ms, avg_tokens_per_call, "
-            "total_pii_redactions, total_injections_blocked, per_qa_results_json) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "total_pii_redactions, total_injections_blocked, timeout_rate, "
+            "per_qa_results_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (agg["run_id"], agg["config_name"], agg["test_set_hash"], agg["total_requests"],
              agg["faithfulness"], agg["context_precision"], agg["context_recall"],
              agg["answer_relevancy"], agg["answer_compliance"], agg["style_consistency"],
              agg["refusal_appropriateness"], agg["p50_latency_ms"], agg["p95_latency_ms"],
              agg["avg_tokens_per_call"], agg["total_pii_redactions"],
-             agg["total_injections_blocked"], agg["per_qa_results_json"]))
+             agg["total_injections_blocked"], agg["timeout_rate"],
+             agg["per_qa_results_json"]))
         await db.commit()
     finally:
         await db.close()
