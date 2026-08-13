@@ -334,7 +334,7 @@ def test_versioned_commit_custom_effective_date(tmp_path):
     assert res.status == "ingested"
 
     items = store.collection.get(where={"chunk_id": "c1"})
-    assert items["metadatas"][0]["effective_date"] == "2022-01-01"
+    assert items["metadatas"][0]["effective_date"] == 20220101  # int YYYYMMDD
 
 
 def test_versioned_doc_group_replaces_different_stems(tmp_path):

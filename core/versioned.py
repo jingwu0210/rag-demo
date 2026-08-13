@@ -37,6 +37,12 @@ class VersionedIngestService:
                 h.update(block)
         return h.hexdigest()
 
+    @staticmethod
+    def _to_effective_int(effective_date: str, now: datetime) -> int:
+        """'YYYY-MM-DD' 或 None → 整数 YYYYMMDD（chromadb $gte 仅支持数值比较）"""
+        date_str = effective_date or now.strftime("%Y-%m-%d")
+        return int(date_str.replace("-", ""))
+
     def check_exists(self, doc_hash: str) -> bool:
         """同内容且仍生效的文档是否已入库（doc_hash 且 is_active）"""
         result = self.store.collection.get(
@@ -91,7 +97,8 @@ class VersionedIngestService:
                     "doc_group": group,
                     "doc_type": doc_type,
                     "version": version,
-                    "effective_date": effective_date or now.strftime("%Y-%m-%d"),
+                    # chromadb $gte 只支持数值 → 存整数 YYYYMMDD
+                    "effective_date": self._to_effective_int(effective_date, now),
                     "ingested_at": now.isoformat(),
                     "doc_hash": doc_hash,
                     "language": c.language,

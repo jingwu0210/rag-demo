@@ -44,7 +44,10 @@ def test_expire_filter_enabled():
     ef = ExpireFilter()
     clause = ef.get_where_clause()
     assert clause is not None
-    assert "$or" in clause
+    # chromadb $gte 仅支持数值 → 断言整数 YYYYMMDD
+    assert "effective_date" in clause
+    cutoff = clause["effective_date"]["$gte"]
+    assert isinstance(cutoff, int) and 20250101 <= cutoff <= 20991231
     # 恢复，避免污染其他测试
     ConfigRegistry.override("retrieval.metadata_filter.expire.enabled", False)
 
