@@ -31,7 +31,12 @@ reranker:
                                      # 60 候选（×3）推理 ~1.8s 贴死 2s 超时 → 频繁降级
                                      # （评估日志实测）；30 候选 ~0.9s 留 1.1s 余量
   timeout: 2
-  max_workers: 3
+  max_workers: 5                    # R8 容量模型（R4 实测 T=816ms/30候选）：
+                                     # 最坏延迟 = ceil(并发/worker) × T ≤ 2s 预算
+                                     # 5 并发 → 1 轮 = 0.82s；10 并发（Semaphore 上限）
+                                     # → 2 轮 = 1.63s 留 20% 余量。c=6+ 零边际收益。
+                                     # 注：5 路 MPS 并发推理无放大未经实测（铁律 6），
+                                     # 若退化 >1.6s/次应回退 4。
   circuit_breaker:
     failure_threshold: 3
     recovery_timeout: 60

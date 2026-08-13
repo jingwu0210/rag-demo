@@ -1,6 +1,7 @@
 """精排模块：Reranker（Cross-Encoder 重排）+ RerankerCircuitBreaker（三态熔断降级）"""
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Callable, List, Optional
 
@@ -80,15 +81,23 @@ class Reranker:
         # 熔断器：默认参数从 config reranker.circuit_breaker.* 读取（3 / 60），
         # 与 top_n 的读取时机一致（构造时 config 已 init）
         self.breaker = RerankerCircuitBreaker()
+        # 模型加载互斥锁（R8）：评估并发 5 首触时，多个线程同时进入 _ensure_model
+        # 各自加载 CrossEncoder 到 MPS → 设备初始化竞争，单次加载从 ~3.4s 爆炸到
+        # ~47.8s（R4 实测 5 样本 rerank=47.8s 降级）。锁串行化加载：并发首触只加载
+        # 一次，其余线程等待复用；稳态下无竞争，仅 ~100ns 开销。
+        self._model_lock = threading.Lock()
 
     def _ensure_model(self):
         if self.model is None:
-            # 延迟导入：避免测试/模块导入时加载 torch + sentence-transformers
-            from sentence_transformers import CrossEncoder
-            self.model = CrossEncoder(
-                ConfigRegistry.get("reranker.model"),
-                device=ConfigRegistry.get("reranker.device"),
-            )
+            with self._model_lock:
+                # double-checked：拿到锁后再查一次，避免第二个线程重复加载
+                if self.model is None:
+                    # 延迟导入：避免测试/模块导入时加载 torch + sentence-transformers
+                    from sentence_transformers import CrossEncoder
+                    self.model = CrossEncoder(
+                        ConfigRegistry.get("reranker.model"),
+                        device=ConfigRegistry.get("reranker.device"),
+                    )
         return self.model
 
     def ensure_loaded(self) -> None:

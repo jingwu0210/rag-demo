@@ -1,5 +1,6 @@
 """精排 + 注入扫描子链路测试：CircuitBreaker 三态 / Reranker（mock CrossEncoder）/ InjectionScanner"""
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -147,6 +148,32 @@ def test_reranker_loads_cross_encoder_from_config(monkeypatch):
 
     fake_cls.assert_called_once_with("BAAI/bge-reranker-v2-m3", device="mps")
     assert [d.chunk_id for d in result] == ["c0", "c1"]
+
+
+def test_reranker_concurrent_first_load_loads_once(monkeypatch):
+    """R8 回归：并发首触时多个线程同时 ensure_loaded，CrossEncoder 只加载一次。
+
+    R4 实测根因：无锁时 3 线程同时加载模型到 MPS，设备初始化竞争使单次加载
+    从 ~3.4s 爆炸到 ~47.8s（5 样本 rerank=47.8s 降级）。慢加载（0.3s）扩大
+    竞争窗口：无锁实现下 5 线程全部通过 None 检查 → 5 次构造，本测试失败。
+    """
+    _init_config()
+    fake_model = MagicMock()
+    fake_model.predict.return_value = np.array([[0.9], [0.8]])
+
+    def _slow_load(*args, **kwargs):
+        time.sleep(0.3)   # 模拟模型加载窗口，让并发竞争必然发生
+        return fake_model
+
+    fake_cls = MagicMock(side_effect=_slow_load)
+    monkeypatch.setattr("sentence_transformers.CrossEncoder", fake_cls)
+
+    reranker = Reranker()
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        list(pool.map(lambda _: reranker.ensure_loaded(), range(5)))
+
+    fake_cls.assert_called_once_with("BAAI/bge-reranker-v2-m3", device="mps")
+    assert reranker.model is fake_model
 
 
 def test_reranker_holds_circuit_breaker_instance():
