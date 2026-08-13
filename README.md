@@ -27,11 +27,30 @@ export DEEPSEEK_API_KEY=<your-key>
 | GET /report | 运营报表（request_metrics 聚合 CSV） |
 | GET /health | 健康检查 |
 
-## 语料与数据
+## Scripts 用法
 
-- 语料生成: `.venv/bin/python scripts/generate_corpus.py` → `data/corpus/`（10 文档，见设计文档 §6.4）
-- 语料入库: `HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py`
-- 入库验证: `.venv/bin/python scripts/verify_corpus.py`
+| 脚本 | 用途 |
+|------|------|
+| `scripts/generate_corpus.py` | 生成 10 个 mock 语料文档 → `data/corpus/`（设计文档 §6.4） |
+| `scripts/ingest_corpus.py` | 语料入库（OCR/分片/向量化/版本管理） |
+| `scripts/verify_corpus.py` | 入库验收（版本替换/OCR/注入样本/过期埋点/双语 6 项） |
+| `scripts/generate_test_set.py` | QA 测试集生成（DeepSeek LLM 生成 + 人工修正） |
+| `scripts/inspect_db.py` | 数据库查看工具（见下） |
+
+```bash
+# 语料
+HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/generate_corpus.py
+HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py
+.venv/bin/python scripts/verify_corpus.py
+
+# 数据查看（data/cache.db 各表）
+.venv/bin/python scripts/inspect_db.py                          # 评估汇总
+.venv/bin/python scripts/inspect_db.py eval --bad               # 评估异常样本
+.venv/bin/python scripts/inspect_db.py eval --runs              # 历史评估列表
+.venv/bin/python scripts/inspect_db.py ingest                   # 入库日志
+.venv/bin/python scripts/inspect_db.py metrics                  # 请求指标（延迟/token/拒答/安全）
+.venv/bin/python scripts/inspect_db.py turns --session <id>     # 指定会话的对话轮次
+```
 
 ## 架构
 
