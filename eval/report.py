@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import os
+import time
 from typing import List, Optional
 
 from core.config import ConfigRegistry
@@ -78,17 +79,27 @@ _METRIC_LABEL = {
 
 
 def generate_report(results: List[dict], output_dir: str) -> str:
-    """写 CSV + Markdown 报告到 output_dir，返回 CSV 路径。"""
+    """写 CSV + Markdown 报告到 output_dir，返回 CSV 路径。
+
+    文件名带时间戳（历史评估报表不互相覆盖 — before/after 对比依赖历史报表），
+    同时维护 eval_report.csv/md 作为最新副本。
+    """
     os.makedirs(output_dir, exist_ok=True)
-    csv_path = os.path.join(output_dir, "eval_report.csv")
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    csv_path = os.path.join(output_dir, f"eval_report-{ts}.csv")
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_COLUMNS)
         for r in results:
             writer.writerow([r.get(_COLUMN_KEY[col], "") for col in CSV_COLUMNS])
 
-    md_path = os.path.join(output_dir, "eval_report.md")
+    md_path = os.path.join(output_dir, f"eval_report-{ts}.md")
     _write_markdown(results, md_path)
+
+    # 最新副本（固定文件名，方便查看；历史版本在带时间戳文件中）
+    import shutil
+    shutil.copy2(csv_path, os.path.join(output_dir, "eval_report.csv"))
+    shutil.copy2(md_path, os.path.join(output_dir, "eval_report.md"))
 
     logger.info("eval_report_written", csv_path=csv_path, md_path=md_path,
                 configs=len(results))
