@@ -7,7 +7,9 @@
 
 - 框架: structlog（JSON 输出）
 - 请求追踪: 每请求生成 `request_id`（UUID），经 `structlog.contextvars.bind_contextvars` 绑定，全链路透传
-- 日志去向: stdout（部署时由外部收集重定向到 data/logs/）
+- 日志去向: stdout（structlog PrintLoggerFactory）；eval.sh 做 stdout/stderr 分流 —
+  结构化日志写入 `data/logs/eval-<timestamp>.log`，第三方库裸噪音
+  （urllib3 警告 / chromadb telemetry / tokenizers）单独存 `*.stderr.log`，不污染主日志
 
 ## 2. 通用字段（每条日志必含）
 
