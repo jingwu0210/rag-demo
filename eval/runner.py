@@ -141,6 +141,16 @@ def _try_ragas_score(sample, metric, metric_name: str) -> Optional[float]:
         return None
 
 
+async def _try_ragas_score_async(sample, metric, metric_name: str) -> Optional[float]:
+    """Ragas 异步版（并发评估用）：在现有事件循环内 await，避免嵌套 asyncio.run。"""
+    try:
+        score = await metric.single_turn_ascore(sample)
+        return float(score)
+    except Exception as exc:
+        logger.warning("ragas_metric_failed", metric=metric_name, error=str(exc))
+        return None
+
+
 # ── 自研 LLM judge（Answer Compliance / Style Consistency）──────────────────
 
 COMPLIANCE_JUDGE_PROMPT = """你是合规打分裁判。给定【参考文档片段】和【模型回答】，按6档打分：
@@ -244,9 +254,85 @@ def compute_test_set_hash(test_set: List[dict]) -> str:
 
 # ── 三配置对比 ──────────────────────────────────────────────
 
+async def _evaluate_qa_async(chat_service, item: dict) -> dict:
+    """单条 QA 的完整评估（并发单元）：问答 + Ragas judge（双指标并行）+ 拒答规则。
+
+    返回 per_qa 条目（含所有指标与中间数据）。
+    """
+    question = item["question"]
+    ground_truth = item.get("ground_truth", "") or ""
+    is_out_of_scope = bool(item.get("is_out_of_scope", False))
+    language = item.get("language", "")
+
+    resp = await chat_service.process(question, None)
+    answer = resp.answer or ""
+    sources = list(resp.sources or [])
+    latency = int((resp.timing_ms or {}).get("total", 0))
+    usage = resp.token_usage or {}
+    token_total = int(usage.get("total", 0))
+    token_prompt = int(usage.get("prompt", 0))
+    token_completion = int(usage.get("completion", 0))
+    refused = bool(resp.refused)
+    from_cache = bool(resp.from_cache)
+    refusal_reason = resp.refusal_reason
+    # R4: 超时检测 — 生成超时/部分返回 或 空回答且非拒答
+    is_timeout = bool(resp.partial) or (
+        not answer and not refused and not from_cache and not sources)
+
+    # ── LLM judge 指标（Ragas；OOS/超时 → None 跳过；双指标并行）──
+    sample = _build_ragas_sample(
+        question, answer, sources, ground_truth,
+        is_out_of_scope=is_out_of_scope or is_timeout)
+    faithfulness = None
+    context_precision = None
+    if sample is not None and _ensure_ragas_llm():
+        faithfulness, context_precision = await asyncio.gather(
+            _try_ragas_score_async(sample, _ragas_faithfulness, "faithfulness"),
+            _try_ragas_score_async(sample, _ragas_context_precision, "context_precision"),
+        )
+
+    # ── 拒答四场景（纯规则，含漏拒检测）──
+    # 正确拒答（OOS 且拒）→ 1；正确作答（非 OOS 未拒且非漏拒）→ 1；
+    # 误拒（非 OOS 拒）→ 0；漏拒（非 OOS 未拒但无 sources 且非缓存）→ 0；OOS 漏拒 → 0
+    if is_out_of_scope:
+        refusal_appropriateness = 1 if refused else 0
+    elif refused:
+        refusal_appropriateness = 0          # 误拒
+    elif not sources and not from_cache and answer:
+        refusal_appropriateness = 0          # 漏拒：无依据仍作答
+    else:
+        refusal_appropriateness = 1          # 正确作答
+
+    chunks_text = ("\n\n---\n\n".join(
+        (s.get("text") or s.get("heading_path", "")) for s in sources)
+        if sources else "")
+
+    return {
+        "question": question,
+        "language": language,
+        "is_out_of_scope": is_out_of_scope,
+        "answer": answer,
+        "refused": refused,
+        "refusal_reason": refusal_reason,
+        "from_cache": from_cache,
+        "sources_count": len(sources),
+        "latency_ms": latency,
+        "tokens_total": token_total,
+        "token_prompt": token_prompt,
+        "token_completion": token_completion,
+        "timeout": is_timeout,
+        "faithfulness": faithfulness,
+        "context_precision": context_precision,
+        "refusal_appropriateness": refusal_appropriateness,
+        "chunks_text": chunks_text,
+    }
+
+
 def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> List[dict]:
     """对 config eval.compare_configs 的三配置循环评估，聚合指标并写入 eval_history。
 
+    并发策略（v1.7）：每配置内的问答并发执行（eval.concurrency，默认 5）；
+    Ragas 双指标并行 gather；自研 judge 批量并发（已有）。
     返回 [{config_name, faithfulness, context_precision, answer_compliance,
            refusal_appropriateness, style_consistency, p50_latency_ms, p95_latency_ms,
            avg_tokens_per_call, total_requests, ...}] 列表（每 config 一条）。
@@ -256,107 +342,57 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
     test_set_hash = compute_test_set_hash(test_set)
     modes = ConfigRegistry.get(
         "eval.compare_configs", ["vector-only", "hybrid", "hybrid+rerank"])
+    concurrency = int(ConfigRegistry.get("eval.concurrency", 5))
     logger.info("eval_run_start", run_id=run_id, test_set_hash=test_set_hash,
-                modes=modes, qa_count=len(test_set))
+                modes=modes, qa_count=len(test_set), concurrency=concurrency)
 
     results = []
     for mode in modes:
         apply_config_mode(mode)
+
+        # ── 并发执行全部 QA（Semaphore 限流）──
+        _ensure_ragas_llm()  # 预配置 judge（一次性）
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _one(item):
+            async with sem:
+                return await _evaluate_qa_async(chat_service, item)
+
+        qa_results = asyncio.run(
+            asyncio.gather(*[_one(i) for i in test_set]))
+
+        # ── 聚合 ──
         per_qa: List[dict] = []
         latencies: List[int] = []
         tokens: List[int] = []
-        prompt_tokens: List[int] = []       # E3: token 分解观测
+        prompt_tokens: List[int] = []
         completion_tokens: List[int] = []
-        chunks_counts: List[int] = []       # E3: chunk 数观测
+        chunks_counts: List[int] = []
         faithfulness_scores: List[float] = []
         precision_scores: List[float] = []
-        compliance_scores: List[float] = []   # 5 分制原始分（聚合用 /5 均值）
         refusal_hits = 0
         timeout_count = 0
         total_pii = 0
         total_injections = 0
-        all_answers: List[str] = []
-        compliance_items: List[tuple] = []   # (question, answer, chunks_text) 供自研 judge
+        compliance_items: List[tuple] = []
 
-        for item in test_set:
-            question = item["question"]
-            ground_truth = item.get("ground_truth", "") or ""
-            is_out_of_scope = bool(item.get("is_out_of_scope", False))
-            language = item.get("language", "")
-
-            resp = asyncio.run(chat_service.process(question, None))
-            answer = resp.answer or ""
-            sources = list(resp.sources or [])
-            latency = int((resp.timing_ms or {}).get("total", 0))
-            usage = resp.token_usage or {}
-            token_total = int(usage.get("total", 0))
-            token_prompt = int(usage.get("prompt", 0))
-            token_completion = int(usage.get("completion", 0))
-            refused = bool(resp.refused)
-            from_cache = bool(resp.from_cache)
-            refusal_reason = resp.refusal_reason
-            # R4: 超时检测 — 生成超时/部分返回 或 空回答且非拒答
-            is_timeout = bool(resp.partial) or (
-                not answer and not refused and not from_cache and not sources)
-            if is_timeout:
+        for qa in qa_results:
+            per_qa.append({k: v for k, v in qa.items() if k != "chunks_text"})
+            latencies.append(qa["latency_ms"])
+            tokens.append(qa["tokens_total"])
+            prompt_tokens.append(qa["token_prompt"])
+            completion_tokens.append(qa["token_completion"])
+            chunks_counts.append(qa["sources_count"])
+            if qa["faithfulness"] is not None:
+                faithfulness_scores.append(qa["faithfulness"])
+            if qa["context_precision"] is not None:
+                precision_scores.append(qa["context_precision"])
+            refusal_hits += qa["refusal_appropriateness"]
+            if qa["timeout"]:
                 timeout_count += 1
-            all_answers.append(answer)
-            if answer and not refused and not is_timeout:
-                chunks_text = "\n\n---\n\n".join(
-                    (s.get("text") or s.get("heading_path", ""))
-                    for s in sources) if sources else ""
-                compliance_items.append((question, answer, chunks_text))
-
-            # ── LLM judge 指标（Ragas；OOS/超时 → None 跳过）──
-            sample = _build_ragas_sample(
-                question, answer, sources, ground_truth,
-                is_out_of_scope=is_out_of_scope or is_timeout)
-            faithfulness = None
-            context_precision = None
-            if sample is not None:
-                faithfulness = _try_ragas_score(
-                    sample, _ragas_faithfulness, "faithfulness")
-                context_precision = _try_ragas_score(
-                    sample, _ragas_context_precision, "context_precision")
-
-            # ── 拒答四场景（纯规则，含漏拒检测）──
-            # 正确拒答（OOS 且拒）→ 1；正确作答（非 OOS 未拒且非漏拒）→ 1；
-            # 误拒（非 OOS 拒）→ 0；漏拒（非 OOS 未拒但无 sources 且非缓存）→ 0；OOS 漏拒 → 0
-            if is_out_of_scope:
-                refusal_appropriateness = 1 if refused else 0
-            elif refused:
-                refusal_appropriateness = 0          # 误拒
-            elif not sources and not from_cache and answer:
-                refusal_appropriateness = 0          # 漏拒：无依据仍作答
-            else:
-                refusal_appropriateness = 1          # 正确作答
-
-            per_qa.append({
-                "question": question,
-                "language": language,
-                "is_out_of_scope": is_out_of_scope,
-                "answer": answer,
-                "refused": refused,
-                "refusal_reason": refusal_reason,
-                "from_cache": from_cache,
-                "sources_count": len(sources),
-                "latency_ms": latency,
-                "tokens_total": token_total,
-                "timeout": is_timeout,
-                "faithfulness": faithfulness,
-                "context_precision": context_precision,
-                "refusal_appropriateness": refusal_appropriateness,
-            })
-            latencies.append(latency)
-            tokens.append(token_total)
-            prompt_tokens.append(token_prompt)
-            completion_tokens.append(token_completion)
-            chunks_counts.append(len(sources))
-            if faithfulness is not None:
-                faithfulness_scores.append(faithfulness)
-            if context_precision is not None:
-                precision_scores.append(context_precision)
-            refusal_hits += refusal_appropriateness
+            if qa["answer"] and not qa["refused"] and not qa["timeout"]:
+                compliance_items.append(
+                    (qa["question"], qa["answer"], qa["chunks_text"]))
 
         # ── 自研 judge（每配置批量打分）──
         compliance_raw = _judge_compliance(

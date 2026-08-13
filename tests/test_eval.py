@@ -128,7 +128,8 @@ def test_run_comparison_executes_three_configs(tmp_path):
     _init_sqlite(tmp_path)
     service = FakeChatService()
     test_set = _sample_test_set()
-    with patch("eval.runner._try_ragas_score", return_value=0.8), \
+    with patch("eval.runner._ensure_ragas_llm", return_value=True), \
+         patch("eval.runner._try_ragas_score_async", return_value=0.8), \
          patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
          patch("eval.runner._judge_style_absolute", return_value=[4, 4, 4, 4]):
         results = run_comparison(service, test_set, run_id="run_e2e")
@@ -240,7 +241,8 @@ def test_run_comparison_ragas_unavailable_yields_none(tmp_path):
     """无 LLM judge（_try_ragas_score 返回 None）→ Ragas 指标为 None，评估不中断"""
     _init_sqlite(tmp_path)
     service = FakeChatService()
-    with patch("eval.runner._try_ragas_score", return_value=None), \
+    with patch("eval.runner._ensure_ragas_llm", return_value=True), \
+         patch("eval.runner._try_ragas_score_async", return_value=None), \
          patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
          patch("eval.runner._judge_style_absolute", return_value=[4, 4, 4, 4]):
         results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas")
