@@ -217,7 +217,7 @@
 
 - 提示注入防御（二层防护：Scanner + Fencer）
 - 答案必须严格基于检索上下文（不得调用预训练知识）
-- 全链路 PII 脱敏（Query / 检索片段 / 输出 / 日志）
+- PII 脱敏按链路环节区分（见 §6.1 PII 全链路脱敏表）：输入 Query 不脱敏（保留原始检索语义）、输出与日志脱敏
 
 ---
 
@@ -278,8 +278,8 @@
 | FR-6.1 | 一键评估脚本 | — | eval.sh + EvalService | `eval.sh` 端到端执行成功 | 🟢 自动化 |
 | FR-6.2 | 对比报告 | — | EvalService 三配置循环 | 产出 before/after CSV + Markdown 报告 | 🟢 自动化 |
 | FR-6.3 | Bad Case 采集 | — | request_metrics 表 | `SELECT * FROM request_metrics WHERE refused OR timeout OR faithfulness < 0.7` | ⚪ 文档引用 |
-| NFR-1.1 | 90% 请求 ≤ 10s | ≥ 90% | ResilienceGuard + Cache | `eval.sh` 中 ≥50 个请求 → P90 延迟聚合 | 🟢 自动化 |
-| NFR-1.2 | 并发 ≥ 5 | ≥ 5 | Semaphore(10) 上限 + ThreadPool 隔离 | 并发压测：5 请求同时发 → P95 ≤ 10s + 无报错 + 无 429 | 🔵 集成测试 |
+| NFR-1.1 | 90% 请求 ≤ 10s | ≥ 90% | ResilienceGuard + Cache | `eval.sh` 中 ≥50 个请求 → P90 延迟聚合（达标口径 P90，对应 assignment "90% ≤10s"；P95 仅观测） | 🟢 自动化 |
+| NFR-1.2 | 并发 ≥ 5 | ≥ 5 | Semaphore(10) 上限 + ThreadPool 隔离 | 并发压测：5 请求同时发 → P95 ≤ 10s + 无报错 + 无 429（压测用更严的 P95 上限；与 NFR-1.1 的 P90 达标口径不冲突） | 🔵 集成测试 |
 | NFR-2 | 质量指标 | 见 1.2 | EvalService + Ragas | `eval.sh` 产出全部 5 项指标值 | 🟢 自动化 |
 | NFR-3.1 | Token 成本估算 | 千次 | Generator token counting | `eval.sh` 聚合千次 cost + 第七章选型论证 | 🟢 自动化 |
 | NFR-3.2 | 模型版本选择理由 | 文档 | 第七章选型论证 | 三 provider 对比实验数据 | ⚪ 文档引用 |
@@ -666,7 +666,7 @@ class ConfigRegistry:
 | ChromaDB | persist_directory, collection_name, distance_metric | 3 |
 | 文档类型 | doc_types{} (每类: doc_type 值域列表，仅作 metadata 标记 — v1.6 无 keywords) | 4 |
 | 日志 | level, format, output, log_dir, rotation, retention, fields[] | 8 |
-| 评估 | test_set_path, test_set_size, models, ragas(metrics), custom_metrics, compare_configs[], result_dir | 8 |
+| 评估 | test_set_path, models, ragas(metrics), custom_metrics, compare_configs[], result_dir, concurrency | 8（v1.8 删除 test_set_size 配置孤儿：条数以测试集文件自决） |
 | 路径 | corpus, ocr_cache, chroma, logs, eval_results, sqlite | 6 |
 
 **总计：100+ 可配置项，全部由 config.yaml 驱动，改配置 = 改行为。**
@@ -2021,7 +2021,7 @@ PATTERNS = [
 
 | 字段 | 类型 | 说明 | 示例 |
 |------|------|------|------|
-| `timestamp` | ISO 8601 | 日志时间 | `2025-08-12T14:32:01.234Z` |
+| `timestamp` | ISO 8601 | 日志时间 | `2026-08-13T12:12:47.404Z` |
 | `request_id` | UUID | 请求唯一标识 | `a1b2c3d4-...` |
 | `session_id` | string | 会话标识 | `s-abc123` |
 | `event` | string | 事件名 | `retrieval_complete` |
@@ -2087,7 +2087,7 @@ SELECT SUM(injection_blocked)
 FROM request_metrics WHERE timestamp >= ?;
 ```
 
-**CSV 输出列**（`GET /report` 响应）：
+**运营报表 CSV 输出列**（`GET /report` 响应，request_metrics 聚合 — 与 §10.4 评估报表 CSV 是两张不同的表）：
 
 ```
 timestamp, config, total_requests, p50_ms, p95_ms,
@@ -2205,10 +2205,14 @@ pii_redact_total, injection_blocked_total
 
 #### 三配置对比实验流程
 
+> 伪代码仅示意流程；实际实现见 `eval/runner.py`（v1.7 并发化：每配置内 QA 并发
+> `asyncio.gather` + `Semaphore(eval.concurrency=5)`，Ragas 双指标并行 gather，
+> 自研 judge 批量并发；串行 40 分钟 → 8-10 分钟）。
+
 ```python
 # eval/runner.py
 def run_comparison():
-    test_set = load_test_set(ConfigRegistry.get("eval.test_set_path"))  # 50 QA pairs
+    test_set = load_test_set(ConfigRegistry.get("eval.test_set_path"))  # 65 条（v1.4 起）
     configs = ConfigRegistry.get("eval.compare_configs")
     
     results = {}
@@ -2224,9 +2228,9 @@ def run_comparison():
             ConfigRegistry.override("retrieval.mode", "hybrid+rerank")
             ConfigRegistry.override("reranker.enabled", True)
         
-        # 所有 QA pair 走完整生产链路
+        # 所有 QA pair 走完整生产链路（v1.7：并发执行，见 eval/runner.py 实际实现）
         metrics = []
-        for qa in test_set:
+        for qa in test_set:   # 伪代码串行示意；实现为 asyncio.gather + Semaphore(5)
             result = ChatService.process(qa.question, session_id=None)
             metrics.append({
                 "faithfulness": evaluate_faithfulness(qa, result),

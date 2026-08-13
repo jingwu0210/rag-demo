@@ -86,11 +86,11 @@
 ```
 
 ```json
-{"timestamp": "2026-08-13T16:45:25.203Z", "level": "info", "event": "retrieval_complete", "module": "retrieval", "request": {"id": "a1b2c3d4"}, "retrieval": {"mode": "hybrid+rerank", "coarse_candidates": 60, "final_chunks": 5, "top1_score": 0.8962, "vector_top1_sim": 0.746, "doc_type_filter": "handbook", "injection_blocked": 0, "latency_ms": 320}, "chunks": [{"heading_path": "第一章 休假制度", "score": 0.8962, "source_file": "employee_handbook_v1.1.pdf"}]}
+{"timestamp": "2026-08-13T16:45:25.203Z", "level": "info", "event": "retrieval_complete", "module": "retrieval", "request": {"id": "a1b2c3d4"}, "retrieval": {"mode": "hybrid+rerank", "coarse_candidates": 30, "final_chunks": 5, "top1_score": 0.8962, "vector_top1_sim": 0.746, "doc_type_filter": "general", "injection_blocked": 0, "latency_ms": 320}, "chunks": [{"heading_path": "第一章 休假制度", "score": 0.8962, "source_file": "employee_handbook_v1.1.pdf"}]}
 ```
 
 ```json
-{"timestamp": "2026-08-13T16:45:25.813Z", "level": "info", "event": "rerank_complete", "module": "retrieval", "request": {"id": "a1b2c3d4"}, "rerank": {"candidates": 60, "kept": 5, "top1_score": 0.8962, "latency_ms": 610}}
+{"timestamp": "2026-08-13T16:45:25.813Z", "level": "info", "event": "rerank_complete", "module": "retrieval", "request": {"id": "a1b2c3d4"}, "rerank": {"candidates": 30, "kept": 5, "top1_score": 0.8962, "latency_ms": 610}}
 ```
 
 ```json
