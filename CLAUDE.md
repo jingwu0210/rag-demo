@@ -13,6 +13,11 @@
 7. **防御承诺必须有失败测试**：brief 出现"X 失败不中断/降级"类承诺时，必须同时要求一个真实触发 X 失败的测试。
 8. **修改必须全局一致**：修改计划/文档/代码的某个决策时，必须 grep 全文找出同主题的所有引用点（根因表、实施步骤、配置清单、设计文档），一处决策改动全部同步。点更新后声称"已更新"是糊弄 — 2026-08-13 的 plan 曾出现"职责分治方案已更新但根因表仍写旧方案"的三处不一致，被用户追问才暴露。
 9. **计划不得压缩已确认的详细设计**：讨论中与用户确认过的逐字段设计（如日志 schema、prompt 原文、聚合公式）必须完整落入计划文件，压缩成一行摘要 = 偷懒。计划是实现的唯一依据 — 2026-08-13 曾把 8 事件日志 schema 压缩成表格一行，被用户追问两次才补全。
+10. **数据文件清理三重防线**（2026-08-13 事故：smoke 前 `rm -f data/cache.db` 把评估写好的 eval_history + per_qa 明细全部误删，before/after 对比依据丢失）：
+    - **cache.db 是混合库**：cache_entries（缓存，可清）+ eval_history（评估历史，不可清）+ request_metrics（运营指标）+ turns/sessions（对话记录）— 清缓存 ≠ 删库
+    - 清缓存必须走应用层 `CacheManager.invalidate_all()`，禁止 rm 数据库文件
+    - 任何 smoke/测试要动数据时必须用临时 DB：`ConfigRegistry.override("paths.sqlite", tmp_path)`，禁止操作生产库
+    - 删除数据文件前先备份（`cp data/cache.db /tmp/backup-<ts>.db`）
 
 ## 环境事实（避免重复踩坑）
 
