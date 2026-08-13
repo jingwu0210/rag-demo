@@ -22,7 +22,29 @@ class OCRPipeline:
         ext = Path(file_path).suffix.lower()
         if ext in (".md", ".txt"):
             return self._process_text_file(file_path)
+        if ext == ".docx":
+            return self._process_docx(file_path)
         return self._process_pdf(file_path)
+
+    def _process_docx(self, file_path: str) -> ParsedDoc:
+        """Word 文档：python-docx 提取段落 + 表格，复用清洗逻辑"""
+        from docx import Document
+        clean_cfg = ConfigRegistry.get("ocr.clean", {})
+        doc = Document(file_path)
+        parts = [p.text for p in doc.paragraphs if p.text.strip()]
+        # 表格按行转为 "| a | b |" 文本
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [c.text.strip() for c in row.cells]
+                if any(cells):
+                    parts.append("| " + " | ".join(cells) + " |")
+        text = "\n".join(parts)
+        if clean_cfg.get("normalize_whitespace", True):
+            text = self._normalize_whitespace(text)
+        if clean_cfg.get("fix_cn_en_spacing", True):
+            text = self._fix_cn_en_spacing(text)
+        return ParsedDoc(text=text, pages=[{"num": 0, "text": text}], tables=[],
+                         source=file_path, language=BilingualHandler.detect(text))
 
     def _process_text_file(self, file_path: str) -> ParsedDoc:
         """纯文本文件（.md/.txt）：直接读取 + 复用 PDF 路径的清洗逻辑"""
