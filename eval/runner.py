@@ -143,7 +143,8 @@ def _try_ragas_score(sample, metric, metric_name: str) -> Optional[float]:
 
 # ── 自研 LLM judge（Answer Compliance / Style Consistency）──────────────────
 
-COMPLIANCE_JUDGE_PROMPT = """你是合规打分裁判。给定【参考文档片段】和【模型回答】，按5档打分：
+COMPLIANCE_JUDGE_PROMPT = """你是合规打分裁判。给定【参考文档片段】和【模型回答】，按6档打分：
+0分：回答未回答问题（如"文档中未包含/无法回答/无法给出确切答案"类表述），或答案与问题无关；
 5分：完全依据文档，不添加、不遗漏、不修改任何规则/数字；
 4分：仅极少量无关补充，关键信息完整准确；
 3分：次要信息轻微遗漏，核心规则无错误；
@@ -189,7 +190,7 @@ def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[int]:
             m = re.search(r"\d+", content)
             if m:
                 score = int(m.group())
-                return min(max(score, 1), 5)
+                return min(max(score, 0), 5)   # v1.6: 0 分档（未回答问题）
             logger.warning("judge_unparsable", content=content[:100])
             return None
     except Exception as exc:
@@ -365,7 +366,11 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             compliance_map[qa[0]] = score
         for q in per_qa:
             q["answer_compliance"] = compliance_map.get(q["question"])
-        compliance_scores = [s for s in compliance_map.values() if s is not None]
+        # v1.6: 0 分（未回答问题，检索失败产物）从 compliance 均值排除，
+        # 单独计入 unanswered_rate（检索失败由 CP 指标惩罚，compliance 只测生成质量）
+        unanswered_count = sum(1 for s in compliance_map.values() if s == 0)
+        compliance_scores = [s for s in compliance_map.values()
+                             if s is not None and s > 0]
 
         # v1.4: Style 改为 vs 风格规范绝对打分（全量答案，跨配置可比）
         style_scores = _judge_style_absolute(
@@ -385,8 +390,10 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             "context_recall": None,
             "answer_relevancy": None,
             # Compliance: score/5 连续分取均值（用户确认：4 分贡献 0.8）
+            # v1.6: 0 分样本（未回答问题）排除出均值，单独计 unanswered_rate
             "answer_compliance": (_round_mean(compliance_scores) / 5
                                   if compliance_scores else None),
+            "unanswered_rate": round(unanswered_count / max(len(compliance_map), 1), 4),
             "style_consistency": style,
             "refusal_appropriateness": round(refusal_hits / n, 4),
             "p50_latency_ms": int(np.percentile(latencies, 50)) if latencies else 0,
@@ -428,8 +435,8 @@ async def _save_eval_history(agg: dict) -> None:
             "p50_latency_ms, p95_latency_ms, avg_tokens_per_call, "
             "total_pii_redactions, total_injections_blocked, timeout_rate, "
             "avg_prompt_tokens, avg_completion_tokens, avg_chunks_per_call, "
-            "per_qa_results_json) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "unanswered_rate, per_qa_results_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (agg["run_id"], agg["config_name"], agg["test_set_hash"], agg["total_requests"],
              agg["faithfulness"], agg["context_precision"], agg["context_recall"],
              agg["answer_relevancy"], agg["answer_compliance"], agg["style_consistency"],
@@ -437,7 +444,8 @@ async def _save_eval_history(agg: dict) -> None:
              agg["avg_tokens_per_call"], agg["total_pii_redactions"],
              agg["total_injections_blocked"], agg["timeout_rate"],
              agg["avg_prompt_tokens"], agg["avg_completion_tokens"],
-             agg["avg_chunks_per_call"], agg["per_qa_results_json"]))
+             agg["avg_chunks_per_call"], agg["unanswered_rate"],
+             agg["per_qa_results_json"]))
         await db.commit()
     finally:
         await db.close()

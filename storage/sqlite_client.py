@@ -86,11 +86,13 @@ async def init_db() -> None:
             avg_prompt_tokens INTEGER DEFAULT 0,
             avg_completion_tokens INTEGER DEFAULT 0,
             avg_chunks_per_call REAL DEFAULT 0,
+            unanswered_rate REAL DEFAULT 0,
             per_qa_results_json TEXT,
             PRIMARY KEY (run_id, config_name)
         )
     """)
     for col_ddl in ("ALTER TABLE eval_history ADD COLUMN timeout_rate REAL DEFAULT 0",
+                    "ALTER TABLE eval_history ADD COLUMN unanswered_rate REAL DEFAULT 0",
                     "ALTER TABLE eval_history ADD COLUMN avg_prompt_tokens INTEGER DEFAULT 0",
                     "ALTER TABLE eval_history ADD COLUMN avg_completion_tokens INTEGER DEFAULT 0",
                     "ALTER TABLE eval_history ADD COLUMN avg_chunks_per_call REAL DEFAULT 0"):
