@@ -126,14 +126,10 @@ refusal:
   enabled: true
   confidence_threshold: 0.45
   rules:
-    out_of_scope_keywords:        # 省钱启发式（非防线）：快速拦截明显越界问题。
-                                  # 覆盖不全（黑名单追不上开放域），OOS 判定主力是
-                                  # 置信度信号（vector_top1_sim / 余弦阈值）
-      - 股票
-      - 天气
-      - 电影
-      - bitcoin
-    sensitive_keywords:
+    # v1.6: out_of_scope 关键词层已删除 — 静态黑名单覆盖不全（"挖矿"漏网）
+    # 且误伤（"股票期权激励政策"被"股票"拦截）；置信度信号已覆盖其正确场景。
+    # 扩展点：日后如需零成本快速拦截明显越界，可在此重新引入启发式层。
+    sensitive_keywords:           # 保留：危险内容拦截不依赖"是否相关"
       - 黑客
       - 攻击
       - exploit

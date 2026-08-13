@@ -83,7 +83,7 @@ class RefusalCheck:
     def evaluate(self, query: str, retrieval_result, mode: str = None) -> Tuple[bool, Optional[str]]:
         """返回 (是否拒答, 拒答原因)；retrieval_result 需有 .docs 属性
 
-        OOS 分层防线（R3 重设计，评估数据驱动）：
+        OOS 判定两层（v1.6：删除关键词层）：
         ① 空结果 → 拒答（所有模式）
         ② 置信度信号 → 拒答：
            - vector-only: docs[0].score 余弦（0-1）与 confidence_threshold 比较
@@ -91,7 +91,12 @@ class RefusalCheck:
              RRF 分数是语料内相对排名，OOS 问题的 top1 RRF 照样高分 → 拦不住 OOS
              （评估实测 hybrid OOS 漏拒 8/10 的根因）；CrossEncoder 分数无界不可比。
              旁路信号缺失（旧结构/mock）时回退到"仅空结果拒答"。
-        ③ 关键词 → 省钱启发式（快速拦截明显越界，覆盖不全，非防线）
+        ③ sensitive 关键词 → safety（保留：危险内容拦截不依赖"是否相关"）
+
+        v1.6 变更：out_of_scope 关键词层删除 — 静态黑名单表达"什么不在知识库"
+        覆盖不全（"挖矿"漏网）且误伤（"股票期权激励政策"被"股票"拦截），
+        置信度信号已覆盖其正确场景（明显越界问题 top1_sim 必然低）。
+        扩展点：日后如需零成本快速拦截明显越界，可在此重新引入启发式层。
         """
         docs = getattr(retrieval_result, "docs", None) or []
         mode = mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
@@ -110,12 +115,7 @@ class RefusalCheck:
             if top1_sim is not None and top1_sim < self.confidence_threshold:
                 return True, "low_confidence"
 
-        # 规则 3: query 命中 out_of_scope 关键词 → out_of_scope（启发式，覆盖不全）
-        for kw in ConfigRegistry.get("refusal.rules.out_of_scope_keywords", []) or []:
-            if kw in query:
-                return True, "out_of_scope"
-
-        # 规则 4: query 命中 sensitive 关键词 → safety
+        # 规则 3: query 命中 sensitive 关键词 → safety（保留）
         for kw in ConfigRegistry.get("refusal.rules.sensitive_keywords", []) or []:
             if kw in query:
                 return True, "safety"

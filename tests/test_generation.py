@@ -280,13 +280,20 @@ def test_refusal_custom_threshold():
     assert (refused, reason) == (True, "low_confidence")
 
 
-def test_refusal_out_of_scope_keyword():
+def test_refusal_oos_keyword_layer_removed_v16():
+    """v1.6: out_of_scope 关键词层已删除 — 股票类问题不再被关键词直接拒答，
+    OOS 判定回归置信度信号（此样本 score=0.9 → 不拒答）"""
     from core.postprocess import RefusalCheck
 
     ConfigRegistry.init("config.yaml")
     rr = _rr([ScoredDoc(chunk_id="c", text="t", score=0.9)])
     refused, reason = RefusalCheck().evaluate("今天股票行情如何", rr)
-    assert (refused, reason) == (True, "out_of_scope")
+    assert (refused, reason) == (False, None)
+
+    # 低置信度（OOS 典型信号）→ 仍拒答
+    rr2 = _rr([ScoredDoc(chunk_id="c", text="t", score=0.1)])
+    refused2, reason2 = RefusalCheck().evaluate("今天股票行情如何", rr2, mode="vector-only")
+    assert (refused2, reason2) == (True, "low_confidence")
 
 
 def test_refusal_sensitive_keyword():
