@@ -389,3 +389,26 @@ def test_ocr_text_page_not_misclassified_as_scanned(tmp_path):
     parsed = OCRPipeline().process(pdf_path)
     assert "Normal text page" in parsed.text
     ConfigRegistry.override("ocr.engine", "paddleocr")  # 恢复
+
+
+def test_ocr_docx_parsing(tmp_path):
+    """Phase 11: .docx 走 python-docx 提取路径（段落 + 表格）"""
+    from docx import Document
+
+    docx_path = os.path.join(str(tmp_path), "policy.docx")
+    d = Document()
+    d.add_paragraph("员工手册要点")
+    d.add_paragraph("年假按照司龄计算。")
+    table = d.add_table(rows=2, cols=2)
+    table.rows[0].cells[0].text = "职级"
+    table.rows[0].cells[1].text = "天数"
+    table.rows[1].cells[0].text = "P3"
+    table.rows[1].cells[1].text = "10"
+    d.save(docx_path)
+
+    parsed = OCRPipeline().process(docx_path)
+    assert "员工手册要点" in parsed.text
+    assert "年假按照司龄计算" in parsed.text
+    assert "| 职级 | 天数 |" in parsed.text   # 表格转文本
+    assert parsed.source == docx_path
+    assert parsed.language == "zh"
