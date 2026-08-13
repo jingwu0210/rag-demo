@@ -196,8 +196,9 @@ logging:
 
 # ── 评估 ──────────────────────────────────────────────────
 eval:
-  test_set_path: data/eval/test_set.json
-  test_set_size: 50
+  test_set_path: data/eval/test_set.json   # 条数以测试集文件自决（v1.8 删除
+                                           # test_set_size 配置孤儿键 — 无代码消费者，
+                                           # 且 50 与实测 65 条漂移）
   models:
     provider: deepseek
     model: deepseek-chat
