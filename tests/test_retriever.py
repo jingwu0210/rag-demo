@@ -98,12 +98,10 @@ def test_build_where_and_clause():
         store = _init_store(tmp)
         r = VectorRetriever(store, _mock_embedder())
         assert r.build_where(None) == {"is_active": True}
+        # v1.6: doc_type 关键词层删除 → 任何分类输入都不产生 doc_type 过滤
         assert r.build_where("general") == {"is_active": True}
-        assert r.build_where("handbook") == {
-            "$and": [{"is_active": True}, {"doc_type": "handbook"}]}
-        # compliance 映射多个 doc_type → $or
-        assert r.build_where("compliance") == {
-            "$and": [{"is_active": True}, {"$or": [{"doc_type": "compliance"}, {"doc_type": "handbook"}]}]}
+        assert r.build_where("handbook") == {"is_active": True}
+        assert r.build_where("compliance") == {"is_active": True}
 
 
 # ── 3. VectorRetriever ───────────────────────────────────────
@@ -121,13 +119,13 @@ def test_vector_retriever_doc_type_filter_and_is_active():
         ])
         retriever = VectorRetriever(store, _mock_embedder())
 
-        # doc_type_filter="handbook" → 只返回 handbook 且排除 inactive
+        # v1.6: doc_type 过滤删除 → 任何 filter 输入都返回全部 active chunks
         result = retriever.retrieve("年假", top_k=4, doc_type_filter="handbook")
         assert result.mode == "vector-only"
-        assert {d.chunk_id for d in result.docs} == {"h1", "h2"}
+        assert {d.chunk_id for d in result.docs} == {"h1", "h2", "t1"}
         assert all(d.metadata["is_active"] is True for d in result.docs)
 
-        # 无 filter → 返回全部 active chunks
+        # 无 filter → 同样返回全部 active chunks
         all_result = retriever.retrieve("年假", top_k=4)
         assert {d.chunk_id for d in all_result.docs} == {"h1", "h2", "t1"}
 
