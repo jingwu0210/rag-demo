@@ -115,7 +115,7 @@ def test_retrieval_service_rerank_reorders_docs():
     assert out.degraded is False
     assert set(out.timing_ms) == {"retrieval", "rerank", "total"}
     # 调用点按函数签名传位置参数（run_in_executor 仅支持位置参数）
-    retriever.retrieve.assert_awaited_with("年假有几天", 60, "handbook", True)
+    retriever.retrieve.assert_awaited_with("年假有几天", 30, "handbook", True)  # candidates_multiplier=1.5
     reranker.rerank.assert_awaited_once()
     scanner.scan.assert_called_once()
 
