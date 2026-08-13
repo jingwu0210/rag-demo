@@ -58,3 +58,26 @@ def test_logging_setup_and_get():
     setup_logging()
     logger = get_logger(module="test")
     logger.info("test_event", key="value")
+
+
+def test_log_reorder_processor_key_order():
+    """L1: 字段重排 — timestamp/level/event/module 固定行首，其余键保持传入顺序"""
+    from core.logging_config import _reorder_fields
+
+    event_dict = {"answer": {"preview": "x"}, "module": "chat",
+                  "event": "generation_complete", "level": "info",
+                  "timestamp": "2026-01-01T00:00:00Z", "llm": {"provider": "d"}}
+    ordered = _reorder_fields(None, None, dict(event_dict))
+    keys = list(ordered.keys())
+    assert keys[:4] == ["timestamp", "level", "event", "module"]
+    assert "llm" in keys and "answer" in keys
+    # 嵌套 dict 不被破坏
+    assert ordered["llm"] == {"provider": "d"}
+
+
+def test_log_reorder_missing_header_fields():
+    """L1: 头部字段缺失时跳过（如 logger 未带 module）"""
+    from core.logging_config import _reorder_fields
+    event_dict = {"event": "x", "timestamp": "t", "foo": 1}
+    ordered = _reorder_fields(None, None, dict(event_dict))
+    assert list(ordered.keys())[:2] == ["timestamp", "event"]

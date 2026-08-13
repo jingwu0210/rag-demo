@@ -134,22 +134,10 @@ class RetrievalService:
         # Step 3: 注入扫描（AdaptiveK 已由 Retriever 应用，此处不重复）
         cleaned, blocked = self.scanner.scan(candidates)
 
-        # ── L2 埋点: rerank_complete（仅执行了精排时）──
+        # ── L2 埋点: retrieval_complete（粗排阶段，所有模式）──
         # request_id 来自 structlog contextvars（API 层 bind_contextvars 注入）；
         # 直接调用场景（eval/smoke）为 None，靠 run_id 追踪
         rid = get_request_id()
-        if rerank_ms > 0 or degraded:
-            logger.info("rerank_complete",
-                        request={"id": rid},
-                        rerank={
-                            "candidates": len(result.docs) if result else 0,
-                            "kept": len(cleaned),
-                            "top1_score": (round(float(cleaned[0].score), 4)
-                                           if cleaned else None),
-                            "latency_ms": rerank_ms,
-                        })
-
-        # ── L2 埋点: retrieval_complete（所有模式）──
         logger.info("retrieval_complete",
                     request={"id": rid},
                     retrieval={
@@ -170,6 +158,18 @@ class RetrievalService:
                         "score": round(float(d.score), 4),
                         "source_file": (d.metadata or {}).get("source_file", ""),
                     } for d in cleaned[:5]])
+
+        # ── L2 埋点: rerank_complete（精排阶段，仅执行了精排时）──
+        if rerank_ms > 0 or degraded:
+            logger.info("rerank_complete",
+                        request={"id": rid},
+                        rerank={
+                            "candidates": len(result.docs) if result else 0,
+                            "kept": len(cleaned),
+                            "top1_score": (round(float(cleaned[0].score), 4)
+                                           if cleaned else None),
+                            "latency_ms": rerank_ms,
+                        })
 
         return RetrievalOutput(
             docs=cleaned,
