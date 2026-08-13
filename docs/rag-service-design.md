@@ -17,7 +17,7 @@
 | v1.5 | 2026-08-13 | §6.3 新增"评估输出物管理"：三层数据生命周期（eval_history 权威/报表文件时间戳归档/评估档案交付物）；报表固定名覆盖的设计缺陷补记 |
 | v1.6 | 2026-08-13 | 关键词层删除（F1 doc_type 分类 + F2 out_of_scope 黑名单）：静态关键词表不可维护且无法验证正确性，检索全库不过滤、OOS 回归空结果+置信度两层；Compliance judge 6 档制（0=未回答）+ unanswered_rate；语料修复（注入样本独立存放 + 生成器自动换行） |
 | v1.7 | 2026-08-13 | 评估并发化：问答并发 eval.concurrency=5 + Ragas 双指标并行（串行 40 分钟 → 8-10 分钟） |
-| v1.8 | 2026-08-13 | R8 rerank 并发缺陷修复（互斥锁 + max_workers 5）+ 文档一致性大扫除（/simplify）：虚构示例数据模板化（ISSUE-001 改用真实案例 R2→R3）；600ms 估算全量替换为实测 816ms/2248ms；doc_type/out_of_scope 关键词层残留清理（§2.4/§3.2/§4.1/§4.3/§4.6/§5.5）；Compliance 6 档制与 Style 绝对打分同步正文与附录；CSV 样例改用 R4 实测数据；拒答文案收敛到 config.yaml 单源 |
+| v1.8 | 2026-08-13 | R8 rerank 并发缺陷修复（互斥锁 + max_workers 5）+ 文档一致性大扫除（/simplify）：虚构示例数据模板化（ISSUE-001 改用真实案例 R2→R3）；600ms 估算全量替换为实测 816ms/2248ms；doc_type/out_of_scope 关键词层残留清理（§2.4/§3.2/§4.1/§4.3/§4.6/§5.5）；Compliance 6 档制与 Style 绝对打分同步正文与附录；CSV 样例改用 R4 实测数据；拒答文案收敛到 config.yaml 单源；删除 cache.l2 配置孤儿键（铁律 4，L2 改文档级扩展点） |
 
 ---
 
@@ -660,7 +660,7 @@ class ConfigRegistry:
 | Embedding | model, device, batch_size, max_length, normalize | 5 |
 | Reranker | enabled, model, device, top_n, candidates_multiplier, timeout, max_workers, circuit_breaker | 8 |
 | 检索 | mode, vector(top_k, metric), bm25(top_k, k1, b), fusion(algorithm, rrf_k), adaptive(enabled, min_score, min_chunks, max_chunks), metadata_filter(enabled, expire: enabled/grace_period_days), timeout, max_workers | 20 |
-| 缓存 | L1(enabled, ttl, max_entries), L2(enabled, similarity_threshold, ttl) | 6 |
+| 缓存 | L1(enabled, ttl, max_entries) | 3（v1.8 删除 l2 配置孤儿：预留键无代码消费者违反铁律 4，L2 为文档级扩展点，实现时再加键） |
 | 分片 | max_chunk_tokens, min_chunk_tokens, overlap_tokens, heading_context, heading_patterns | 5+ |
 | OCR | engine, language[], layout_analysis, table_restore, clean(5 项), dpi, max_image_pixels | 11 |
 | PII | enabled, patterns[](per-rule), log_redaction | 2+ |
@@ -1462,15 +1462,9 @@ class CacheManager:
 
 #### L2 语义缓存（可选扩展）
 
-当前仅实现 L1 精确匹配（"年假怎么算" ≠ "年假如何计算"），config 中预留了 L2 扩展：
-
-```yaml
-cache:
-  l2:
-    enabled: false                 # 默认关闭
-    similarity_threshold: 0.95     # query 向量相似度 > 0.95 → 复用答案
-    ttl: 86400                     # 24h
-```
+当前仅实现 L1 精确匹配（"年假怎么算" ≠ "年假如何计算"）。L2 为**文档级扩展点**：
+v1.8 起 config 不预留 l2 键（预留键无代码消费者 = 配置孤儿，违反铁律 4），实现
+L2 时随任务引入配置键 + 消费者 + 测试。
 
 **扩展方案（不落地，仅论述）**：
 
@@ -2729,7 +2723,7 @@ echo "评估完成: data/eval/results/report.csv"
 | 局限 | 说明 | 是否为 Assignment 问题 |
 |------|------|:---:|
 | 单机算力上限 | 无横向扩容能力，corpus 增长到 10 万 chunks 后 ChromaDB 性能下降 | ❌ 单实例约束决定 |
-| 仅 L1 精确缓存 | 无语义相似缓存，"年假怎么算"和"年假如何计算"不走缓存 | ⚠️ L2 语义缓存预留了接口 |
+| 仅 L1 精确缓存 | 无语义相似缓存，"年假怎么算"和"年假如何计算"不走缓存 | ⚠️ L2 语义缓存为文档级扩展点（v1.8：config 不预留键，见 §4.7） |
 | 无多租户 RBAC | 所有用户可查询全库范围 | ❌ Assignment 不要求 |
 | 松散多轮 | 不做 query rewriting，纯依赖 LLM 理解指代 | ✅ 10s 约束下的理性取舍 |
 | M4 本地推理限制 | 未来如果换更大的 Reranker 模型可能不够快 | ⚠️ 当前模型完全够用 |
