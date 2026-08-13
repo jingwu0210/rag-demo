@@ -1353,13 +1353,15 @@ class PIIScrubber:
 
 ```python
 class RefusalCheck:
-    def evaluate(self, retrieval_result: RetrievalResult, query: str) -> RefusalDecision:
-        # Rule 1: 检索置信度不足
-        if retrieval_result.docs and retrieval_result.docs[0].score < self.confidence_threshold:
+    def evaluate(self, retrieval_result: RetrievalResult, query: str, mode: str = None) -> RefusalDecision:
+        # Rule 1: 检索结果为空 → low_confidence（所有模式）
+        if not retrieval_result.docs:
             return RefusalDecision(refuse=True, reason="low_confidence")
         
-        # Rule 2: 检索结果为空
-        if not retrieval_result.docs:
+        # Rule 2: 分数阈值 — 仅 vector-only（余弦相似度 0-1 语义可比）
+        #   hybrid 的 RRF 分数（~0.03 量级）与 hybrid+rerank 的 CrossEncoder
+        #   分数（无界）与 0.45 阈值不可比，直接比较会误拒所有请求（smoke 实测）
+        if mode == "vector-only" and retrieval_result.docs[0].score < self.confidence_threshold:
             return RefusalDecision(refuse=True, reason="low_confidence")
         
         # Rule 3: 超出知识库范围
