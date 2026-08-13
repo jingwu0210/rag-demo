@@ -11,6 +11,7 @@
 |------|------|---------|
 | v1.0 | 2025-08-12 | 初始版本：十大章节完整设计 |
 | v1.1 | 2026-08-13 | 新增 §6.4 语料设计；标题与文件名去日期化，改由本节追踪版本 |
+| v1.2 | 2026-08-13 | 五大指标完整计算方案落地（§6.3 重写）：Answer Compliance 改自研 LLM judge 5 分制 score/5 均值；Style Consistency 落地 pairwise judge 固定种子；Refusal 四场景纯规则含漏拒；新增 Timeout Rate 附加指标。检索分数语义契约（§4.3 AdaptiveK 按 mode 区分阈值 + hybrid_min_score；§4.6 RefusalCheck OOS 分层重设计 — hybrid 系用 vector_top1_sim 旁路信号）；sources 取消 500 字符截断；rerank 候选池独立（skip_adaptive） |
 
 ---
 
@@ -984,18 +985,25 @@ k=60: 排名权重平缓（1/61=0.0164 vs 1/70=0.0143 → 1.15× 差距）
 
 ```python
 class AdaptiveK:
-    def apply(self, docs, min_score=0.45, min_chunks=3, max_chunks=8):
-        # Step 1: 分数阈值过滤
-        docs = [d for d in docs if d.score >= min_score]
-        
-        # Step 2: 动态截断
-        if len(docs) < min_chunks:
-            # 候选太少 → 尝试降低阈值补召回
-            docs = self._expand(docs, min_score * 0.75)
-        
-        # 保底 3 条，最多 8 条
-        return docs[:max(max_chunks, min_chunks)]
+    def apply(self, docs, mode="vector-only", min_score=0.45,
+              hybrid_min_score=0.0164, min_chunks=3, max_chunks=8):
+        # 分数语义按模式区分（v1.2 分数语义契约）：
+        # - vector-only: 余弦相似度（0-1），min_score 绝对阈值有意义
+        # - hybrid: RRF 排名融合分（实现公式 1/(60+rank)，值域 ~0.016-0.033），
+        #   与余弦尺度不可比 → 用 hybrid_min_score（RRF 尺度，默认 = 单路
+        #   rank1 理论值 1/61 ≈ 0.0164，语义"至少一路排第一"才保留）
+        # - hybrid+rerank: 粗排由调用方 skip_adaptive 绕过本类（候选留给
+        #   reranker），最终条数由 reranker top_n 决定
+        threshold = min_score if mode == "vector-only" else hybrid_min_score
+        kept = [d for d in docs if d.score >= threshold]
+        if not kept and min_chunks:
+            kept = docs[:min_chunks]        # 保底
+        if max_chunks:
+            kept = kept[:max_chunks]        # 上限
+        return kept
 ```
+
+**设计教训（v1.2 根因记录）**：v1.0 的 AdaptiveK 是"共享组件但伪代码只建模余弦语义" — min_score=0.45 与 RRF 量级 ~0.03 在同一文档中定义却未做量级交叉检查，导致 hybrid 模式所有 RRF 分数被滤掉只剩保底 3 条（评估实测 src=3 vs vector 的 8 条，faithfulness 被拉低）。v1.2 起建立"分数语义契约"：两个消费检索分数的组件（AdaptiveK、RefusalCheck）按模式分别使用语义正确的信号。
 
 **③ MetadataFilter（元数据范围控制）**：
 
@@ -1354,17 +1362,26 @@ class PIIScrubber:
 ```python
 class RefusalCheck:
     def evaluate(self, retrieval_result: RetrievalResult, query: str, mode: str = None) -> RefusalDecision:
-        # Rule 1: 检索结果为空 → low_confidence（所有模式）
+        # OOS 分层防线（v1.2 重设计，评估数据驱动）：
+        # ① 空结果 → 拒答（所有模式）
+        # ② 置信度信号 → 拒答：
+        #    vector-only: docs[0].score 余弦（0-1）与 0.45 比较
+        #    hybrid 系: 用 vector_top1_sim 旁路信号（余弦 0-1 有绝对语义）。
+        #      RRF 是语料内相对排名 — OOS 问题的 top1 RRF 照样高分，
+        #      拦不住 OOS（v1.1 实测 hybrid OOS 漏拒 8/10 的根因）
+        # ③ 关键词 → 省钱启发式（快速拦截明显越界；黑名单追不上开放域，
+        #    覆盖不全且会误伤，定位是启发式不是防线）
         if not retrieval_result.docs:
             return RefusalDecision(refuse=True, reason="low_confidence")
+        if mode == "vector-only":
+            if retrieval_result.docs[0].score < self.confidence_threshold:
+                return RefusalDecision(refuse=True, reason="low_confidence")
+        else:
+            top1_sim = getattr(retrieval_result, "vector_top1_sim", None)
+            if top1_sim is not None and top1_sim < self.confidence_threshold:
+                return RefusalDecision(refuse=True, reason="low_confidence")
         
-        # Rule 2: 分数阈值 — 仅 vector-only（余弦相似度 0-1 语义可比）
-        #   hybrid 的 RRF 分数（~0.03 量级）与 hybrid+rerank 的 CrossEncoder
-        #   分数（无界）与 0.45 阈值不可比，直接比较会误拒所有请求（smoke 实测）
-        if mode == "vector-only" and retrieval_result.docs[0].score < self.confidence_threshold:
-            return RefusalDecision(refuse=True, reason="low_confidence")
-        
-        # Rule 3: 超出知识库范围
+        # Rule 3: 超出知识库范围（启发式）
         for kw in ConfigRegistry.get("refusal.rules.out_of_scope_keywords"):
             if kw in query:
                 return RefusalDecision(refuse=True, reason="out_of_scope")
@@ -2071,17 +2088,104 @@ pii_redact_total, injection_blocked_total
 
 ### 6.3 评测体系
 
-#### 评测工具 & 指标定义
+#### 五大指标完整计算方案（v1.2 落地版）
 
-| 指标 | 工具 | 定义 |
-|------|------|------|
-| **Faithfulness** | Ragas | 答案中每个断言是否能在检索上下文中找到支撑（LLM judge 逐断言验证） |
-| **Context Precision** | Ragas | 检索结果中相关 chunk 在 rank 中的位置加权精度：`CP = Σ(P@k × relevance_k) / total_relevant` |
-| **Context Recall** | Ragas | ground truth 中引用的 chunk 是否被检索到 |
-| **Answer Relevancy** | Ragas | 答案与问题的语义相关度 |
-| **Answer Compliance** | 自建 LLM judge | 判断答案是否严格遵循文档内容，不得添加、不得遗漏关键信息（1-5 分制，≥4 算合规） |
-| **Style Consistency** | 自建 LLM judge | Pair-wise comparison：随机抽取 2 个回答，判断风格是否一致 |
-| **Refusal Appropriateness** | 规则 + LLM judge | 测试集混入 20% out-of-scope 问题，评估"该拒则拒、该答则答" |
+统一取值范围 0~1，1 为满分。分为两类：Ragas 原生（Faithfulness / Context Precision）与自研 judge（Answer Compliance / Style Consistency）+ 纯规则（Refusal Appropriateness）。
+
+**① Faithfulness（忠实度，Ragas 原生）**
+
+- **核心定义**：判断模型回答里每一条独立事实断言，是否全部能在检索 Chunk 中找到原文支撑；只要存在编造、上下文不存在的信息，分数下降。目标 ≥0.85
+- **计算公式**：`Faithfulness = Supported Claims Count / Total Claims Count`（LLM 拆分回答为多条 claim，逐条判断检索上下文能否支撑）
+- **实现**：Ragas `faithfulness` 指标（LLM judge 指向 DeepSeek OpenAI 兼容端点）；`retrieved_contexts` 用 sources 的 chunk 全文（v1.2 起取消 500 字符截断 — 英文 512-token chunk ≈2400 字符，截断会切掉支撑内容）
+- **跳过规则**：OOS 问题（无断言可判）与超时样本（降级话术无支撑）不参与计算，记 None 不拉低均值
+- **典型低分场景**：检索混入无关文档导致 LLM 脑补、切片截断关键规则
+
+**② Context Precision（上下文精度，Ragas 原生）**
+
+- **核心定义**：衡量检索返回的 Chunk 按排名加权的有效相关性 — 越靠前的有用片段分数权重越高；过滤无关噪声，直接反映检索链路好坏。目标 ≥0.70
+- **计算公式**：`CP = Σ(k=1..K) Precision@k × Relevance_k / Total Relevant Chunks`
+- **实现**：Ragas `context_precision` 指标（LLM judge 依据 reference 判定每个 chunk 相关性后按公式加权）
+- **跳过规则**：OOS 问题 reference 为空 → Ragas 抛 KeyError('reference')（v1.1 实测 10 次崩溃）→ v1.2 起 OOS 直接跳过该指标
+
+**③ Answer Compliance（答案合规性，自研 LLM judge）**
+
+- **核心定义**：答案是否严格忠于文档，三类扣分行为：额外新增文档不存在的信息（幻觉）/ 遗漏原文关键要求、数字、流程 / 篡改原文数值、条款、时效。基础 ≥0.8，进阶 ≥0.9
+- **打分规则**（5 分制 → 归一到 0~1）：
+  - 5 分：无新增、无遗漏、无篡改，完全贴合原文
+  - 4 分：微小无关补充，无关键信息丢失
+  - 3 分：少量次要信息遗漏 / 轻微改写
+  - 2 分：重要数字 / 条款遗漏或修改
+  - 1 分：大量编造，核心内容错误
+- **聚合方式**：`Answer Compliance = Σ(LLM 打分) / (样本数 × 5)`，即 score/5 连续分取均值。**达标语义 = 平均分 ≥0.9**（4 分回答贡献 0.8，5 分足够多即可达标）
+- **Judge Prompt**（实现原文）：
+
+```
+你是合规打分裁判。给定【参考文档片段】和【模型回答】，按5档打分：
+5分：完全依据文档，不添加、不遗漏、不修改任何规则/数字；
+4分：仅极少量无关补充，关键信息完整准确；
+3分：次要信息轻微遗漏，核心规则无错误；
+2分：重要金额、流程、时效遗漏或篡改；
+1分：大量编造内容，核心回答与文档冲突。
+只输出数字分数，不要额外解释。
+
+参考文档：
+{chunks_text}
+
+模型回答：
+{llm_answer}
+```
+
+- **实现**：批量 asyncio.gather + Semaphore(5) 限流；judge 失败不中断评估（记 None）
+
+**④ Refusal Appropriateness（拒答适配性，纯规则）**
+
+- **核心定义**：系统该拒就拒、该答就答的能力。基础 ≥0.8，进阶 ≥0.9
+- **四场景判定**（二元 0/1，纯程序化 — LLM judge 引入随机性破坏可复现）：
+
+| 场景 | 判定条件 | 得分 |
+|------|---------|:---:|
+| 正确拒答 | OOS 问题 且 系统拒答 | 1 |
+| 正确作答 | 非 OOS 且 未拒答 且 有检索依据 | 1 |
+| 误拒 | 非 OOS 但系统拒答 | 0 |
+| 漏拒 | 非 OOS 且 未拒答 但 无 sources 且非缓存（无依据仍作答） | 0 |
+| OOS 漏拒 | OOS 问题 但 未拒答（LLM 编造答案） | 0 |
+
+- **计算公式**：`Refusal Appropriateness = 正确处理样本数 / 总测试样本数`
+- **评测集要求**：混入 20% out-of-scope 问题（v1.2 测试集 53 条含 10 条 OOS）
+
+**⑤ Style Consistency（风格一致性，自研 pairwise LLM judge）**
+
+- **核心定义**：所有回答的语气、格式、专业度、排版结构是否统一（正式企业话术、统一分点格式，不出现口语化/随意回答）。基础 ≥0.8，进阶 ≥0.85
+- **实现**：Pairwise 对比 — 从当前配置所有回答中**固定种子**（`random.Random(42)`）抽 20 对，LLM judge 对每对打 5 分风格相似度分；**固定种子保证同一测试集每次评估结果完全一致（before/after 可对比）**
+- **Judge Prompt**（实现原文）：
+
+```
+对比两段AI回答的写作风格、正式程度、排版结构、话术规范，打1-5分：
+5=高度统一，4=轻微差异，3=中等差异，2=差异明显，1=完全不同
+仅输出数字。
+
+回答A：
+{ans1}
+
+回答B：
+{ans2}
+```
+
+- **计算公式**：`Style Consistency = Σ(配对分数) / (配对数 × 5)`
+
+#### 指标区分速查表
+
+| 指标 | 计算来源 | 核心判断对象 | 优化手段 |
+|------|---------|-------------|---------|
+| Context Precision | Ragas | 检索层：检索切片是否有效 | 混合检索、RRF、Reranker、自适应 K |
+| Faithfulness | Ragas | 生成层：回答是否基于文档、无幻觉 | 提升检索精度、强约束 Prompt |
+| Answer Compliance | 自研 LLM judge | 不增不漏不改原文 | 优化切片、Prompt 防幻觉 |
+| Refusal Appropriateness | 纯规则四场景 | 拒答逻辑是否准确 | 置信阈值调优、OOS 分层防线 |
+| Style Consistency | 成对 LLM judge（固定种子） | 输出话术统一 | 统一 System Prompt 风格约束 |
+
+#### 附加性能指标
+
+- **Timeout Rate**：超时样本占比（v1.2 新增，单独统计不丢弃 — 符合可观测、故障诊断交付要求）。超时判定：`resp.partial` 或（非拒答且空回答且无 sources 且非缓存）
 
 #### 三配置对比实验流程
 
@@ -2731,20 +2835,24 @@ RRF_score(d) = Σ_{r ∈ R} 1 / (k + rank_r(d))
 - 若 chunk 未出现在某结果集中，对应项贡献 0
 ```
 
-**Answer Compliance（自建）**：
+**Answer Compliance（自研 LLM judge，v1.2 落地）**：
 ```
-Compliance = (一致断言数) / (总断言数 + 遗漏断言数)
-
-LLM Judge Prompt:
-"比对回答与文档原文，找出：1) 内容一致的部分 2) 回答添加了原文没有的内容
-3) 原文有的关键信息在回答中被遗漏。合规率 = 一致项 / (一致 + 添加 + 遗漏)"
+单样本: LLM judge 按 5 分制打分（prompt 见 §6.3）
+聚合: Answer Compliance = Σ(打分) / (样本数 × 5)   ← score/5 连续分取均值
+达标语义: 平均分 ≥ 0.9（4 分贡献 0.8，5 分足够多即可达标）
 ```
 
-**Style Consistency（自建）**：
+**Style Consistency（自研 pairwise judge，v1.2 落地）**：
 ```
-随机抽取 N 对回答（N ≥ 20），对每对做 pairwise comparison:
-"这两个回答的语言风格、专业程度、结构格式是否一致？（1-5 分）"
+固定种子 random.Random(42) 抽 N 对回答（N=20），每对 5 分风格相似度打分
 得分 = 所有 pair 的平均分 / 5
+固定种子保证同一测试集每次评估结果完全一致（before/after 可对比）
+```
+
+**Refusal Appropriateness（纯规则，v1.2 落地）**：
+```
+四场景 0/1 判定（正确拒答/正确作答/误拒/漏拒/OOS漏拒，判定条件见 §6.3）
+聚合 = 正确处理样本数 / 总测试样本数
 ```
 
 ---
