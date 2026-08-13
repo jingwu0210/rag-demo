@@ -82,9 +82,10 @@ class RetrievalService:
         need_rerank = (mode_cfg == "hybrid+rerank"
                        and ConfigRegistry.get("reranker.enabled", True))
         if need_rerank:
-            # rerank 候选池：粗排不截断，候选数 = top_k × candidates_multiplier（设计 §4.3）
+            # rerank 候选池：粗排不截断，候选数 = top_k × candidates_multiplier（设计 §4.4）
+            # fallback 默认值与 config.yaml 一致（1.5 → 30 候选）；config 为唯一真源
             coarse_top_k = int(ConfigRegistry.get("retrieval.vector.top_k", 20)
-                               * ConfigRegistry.get("reranker.candidates_multiplier", 3))
+                               * ConfigRegistry.get("reranker.candidates_multiplier", 1.5))
         else:
             coarse_top_k = 20
 
