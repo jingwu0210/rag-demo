@@ -210,6 +210,7 @@ eval:
     - vector-only
     - hybrid
     - hybrid+rerank
+  concurrency: 5                   # 评估并发度（问答并发 + judge 并发，v1.7）
   result_dir: data/eval/results
 
 # ── 存储路径 ──────────────────────────────────────────────
