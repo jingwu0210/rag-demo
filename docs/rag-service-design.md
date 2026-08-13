@@ -9,14 +9,15 @@
 
 | 版本 | 日期 | 变更摘要 |
 |------|------|---------|
-| v1.0 | 2025-08-12 | 初始版本：十大章节完整设计 |
+| v1.0 | 2026-08-12 | 初始版本：十大章节完整设计 |
 | v1.1 | 2026-08-13 | 新增 §6.4 语料设计；标题与文件名去日期化，改由本节追踪版本 |
-| v1.2 | 2026-08-13 | 五大指标完整计算方案落地（§6.3 重写）：Answer Compliance 改自研 LLM judge 5 分制 score/5 均值；Style Consistency 落地 pairwise judge 固定种子；Refusal 四场景纯规则含漏拒；新增 Timeout Rate 附加指标。检索分数语义契约（§4.3 AdaptiveK 按 mode 区分阈值 + hybrid_min_score；§4.6 RefusalCheck OOS 分层重设计 — hybrid 系用 vector_top1_sim 旁路信号）；sources 取消 500 字符截断；rerank 候选池独立（skip_adaptive） |
+| v1.2 | 2026-08-13 | 五大指标完整计算方案落地（§6.3 重写）：Answer Compliance 改自研 LLM judge 5 分制 score/5 均值（v1.6 起改 6 档制，见下）；Style Consistency 落地 pairwise judge（v1.4 起改绝对打分，见下）；Refusal 四场景纯规则含漏拒；新增 Timeout Rate 附加指标。检索分数语义契约（§4.3 AdaptiveK 按 mode 区分阈值 + hybrid_min_score；§4.6 RefusalCheck OOS 分层重设计 — hybrid 系用 vector_top1_sim 旁路信号）；sources 取消 500 字符截断；rerank 候选池独立（skip_adaptive） |
+| v1.3 | 2026-08-13 | 日志系统升级（§6.2）：JSON 格式头部四字段平铺 + 业务分组嵌套（timestamp 行首）；8 事件正常路径埋点（chat_request_start/cache_check/retrieval_complete/rerank_complete/generation_complete/refusal_triggered/pii_redacted/chat_request_end）；query 截断 200 记录 + answer 预览 200；eval.sh 日志按时间戳独立文件 + stdout/stderr 分流 |
 | v1.4 | 2026-08-13 | 评估失真五点修复：Style Consistency 重设计（pairwise → vs 风格规范绝对打分，跨配置可比）；测试集 53→65 条（精确术语类/复杂多跳类/边界模糊类三类区分度样本）；Token/Chunk 分解观测（avg_prompt_tokens/avg_completion_tokens/avg_chunks_per_call/timeout_rate 列） |
 | v1.5 | 2026-08-13 | §6.3 新增"评估输出物管理"：三层数据生命周期（eval_history 权威/报表文件时间戳归档/评估档案交付物）；报表固定名覆盖的设计缺陷补记 |
 | v1.6 | 2026-08-13 | 关键词层删除（F1 doc_type 分类 + F2 out_of_scope 黑名单）：静态关键词表不可维护且无法验证正确性，检索全库不过滤、OOS 回归空结果+置信度两层；Compliance judge 6 档制（0=未回答）+ unanswered_rate；语料修复（注入样本独立存放 + 生成器自动换行） |
 | v1.7 | 2026-08-13 | 评估并发化：问答并发 eval.concurrency=5 + Ragas 双指标并行（串行 40 分钟 → 8-10 分钟） |
-| v1.3 | 2026-08-13 | 日志系统升级（§6.2）：JSON 格式头部四字段平铺 + 业务分组嵌套（timestamp 行首）；8 事件正常路径埋点（chat_request_start/cache_check/retrieval_complete/rerank_complete/generation_complete/refusal_triggered/pii_redacted/chat_request_end）；query 截断 200 记录 + answer 预览 200；eval.sh 日志按时间戳独立文件 + stdout/stderr 分流 |
+| v1.8 | 2026-08-13 | R8 rerank 并发缺陷修复（互斥锁 + max_workers 5）+ 文档一致性大扫除（/simplify）：虚构示例数据模板化（ISSUE-001 改用真实案例 R2→R3）；600ms 估算全量替换为实测 816ms/2248ms；doc_type/out_of_scope 关键词层残留清理（§2.4/§3.2/§4.1/§4.3/§4.6/§5.5）；Compliance 6 档制与 Style 绝对打分同步正文与附录；CSV 样例改用 R4 实测数据；拒答文案收敛到 config.yaml 单源 |
 
 ---
 
@@ -54,7 +55,7 @@
 | RAG Faithfulness（忠实度） | ≥ 0.85 | Ragas `faithfulness`：LLM judge 判断答案是否完全由检索上下文支撑 |
 | Context Precision（上下文精度） | ≥ 0.70 | Ragas `context_precision`：检索结果中相关 chunk 在排名中的加权精度 |
 | Answer Compliance（答案合规率） | ≥ 80%（基础）/ ≥ 90%（进阶） | 自建 LLM judge：判断答案是否严格遵循文档内容，不添加、不遗漏 |
-| Style Consistency（风格一致性） | ≥ 80%（基础）/ ≥ 0.85（进阶） | 自建 LLM judge：pair-wise comparison 评估答案风格差异 |
+| Style Consistency（风格一致性） | ≥ 80%（基础）/ ≥ 0.85（进阶） | 自建 LLM judge：vs 风格规范绝对打分（v1.4，方法详见 §6.3 ⑤） |
 | Refusal Appropriateness（拒答适配性） | ≥ 80%（基础）/ ≥ 90%（进阶） | 规则 + LLM judge：混入 20% out-of-scope 问题，评估拒答准确性 |
 
 #### 交付物要求
@@ -260,7 +261,7 @@
 |------|------|:---:|------|------|:---:|
 | FR-1.1 | 两种检索模式 | — | Retriever (策略模式) | `eval.sh` 三配置对比实验 | 🟢 自动化 |
 | FR-1.2 | Reranker 配置开关 | — | ConfigRegistry + Reranker | 改 `reranker.enabled` 切换模式，架构即证明 | 🟡 设计保证 |
-| FR-1.3 | doc_type 元数据过滤 | — | MetadataFilter | ChromaDB where 子句，代码 review 确认 | 🟡 设计保证 |
+| FR-1.3 | doc_type 仅作 metadata 标记（v1.6：检索全库不过滤） | — | MetadataFilter | chunk metadata 含 doc_type 字段，评估报告可分析；检索 where 不含 doc_type | 🟡 设计保证 |
 | FR-1.4 | 自适应 Top-K | — | AdaptiveK | 全局 min/max_k 硬边界 + min_score + [min_chunks, max_chunks] 动态截断，代码 review 确认 | 🟡 设计保证 |
 | FR-2.1 | 多轮对话 | — | Session + Turns 表 (SQLite) | 多轮 QA 端到端测试 | 🔵 集成测试 |
 | FR-2.2 | 拒答 | ≥ 80% | RefusalCheck | 测试集混入 20% out-of-scope → Refusal Appropriateness 指标 | 🟢 自动化 |
@@ -439,7 +440,7 @@ eval.sh（自动化，~1 分钟）
           BilingualHandler.detect → 语言标记(zh/en/mixed)
               │
               ▼
-          MetadataFilter.classify → 确定 doc_type 检索范围
+          MetadataFilter.classify → doc_type 仅作 metadata 标记（v1.6：检索全库不过滤）
               │
               ▼
           SessionStore.get_history → 最近 3 轮 Q&A → 上下文装配
@@ -551,7 +552,7 @@ eval.sh（自动化，~1 分钟）
 |------|------|
 | CPU 密集任务不进主事件循环 | FastAPI 的 async event loop 被同步阻塞会导致所有请求排队 |
 | Embedding ThreadPool(2) | BGE-M3 在 M4 上 ~50ms，2 worker 足够覆盖 5 并发 |
-| Reranker ThreadPool(3) | Cross-Encoder ~600ms/次，3 worker 并行可覆盖 5 并发（最坏排队 ≤ 2 × 600ms） |
+| Reranker ThreadPool(5) | R8 容量模型（实测 816ms/30 候选）：最坏 = ceil(并发/worker) × T ≤ 2s 预算 → 5 并发 1 轮 0.82s、10 并发 2 轮 1.63s；模型加载互斥锁防并发首触竞争（R4 根因，见 §4.4 R8） |
 | LLM API 走 AsyncIO | 网络 IO 本就不该进线程池，httpx.AsyncClient 完美适配 |
 | 不拆微服务 | 单实例约束 + 进程内函数调用零序列化开销 |
 
@@ -663,7 +664,7 @@ class ConfigRegistry:
 | 并发 | max_requests(10), request_timeout(9s), graceful_timeout_status | 3 |
 | 多轮 | max_history_turns, enable_summary, session_ttl | 3 |
 | ChromaDB | persist_directory, collection_name, distance_metric | 3 |
-| 文档类型 | doc_types{} (每类: description, keywords) | 4+ |
+| 文档类型 | doc_types{} (每类: doc_type 值域列表，仅作 metadata 标记 — v1.6 无 keywords) | 4 |
 | 日志 | level, format, output, log_dir, rotation, retention, fields[] | 8 |
 | 评估 | test_set_path, test_set_size, models, ragas(metrics), custom_metrics, compare_configs[], result_dir | 8 |
 | 路径 | corpus, ocr_cache, chroma, logs, eval_results, sqlite | 6 |
@@ -756,8 +757,8 @@ class ChatService:
         
         # 2. Query 预处理
         lang = BilingualHandler.detect(query)
-        doc_type = MetadataFilter.classify(query)
-        
+        doc_type = MetadataFilter.classify(query)  # v1.6: 恒返回 "general"，仅作 metadata 标记
+
         # 3. 会话管理 & 上下文装配
         if not session_id:
             session_id = self._create_session()
@@ -891,7 +892,7 @@ class RetrievalService:
 class RetrievalInput:
     query: str                          # 原始查询（不做改写）
     top_k: int = 20                     # 粗排候选数
-    doc_type_filter: Optional[str]      # 元数据过滤（如 "handbook"）
+    doc_type_filter: Optional[str]      # 接口保留参数（v1.6 起 no-op：检索全库不过滤）
 
 @dataclass
 class ScoredDoc:
@@ -918,11 +919,8 @@ Retriever.retrieve(query, top_k, doc_type_filter)
 │   ├── "hybrid"         → HybridRetriever (4.1.2)
 │   └── "hybrid+rerank"  → RerankedRetriever (4.1.3)
 │
-├── [元数据过滤] (所有模式共用)
-│   if doc_type_filter:
-│       ChromaDB where={"doc_type": doc_type_filter, "is_active": true}
-│   else:
-│       ChromaDB where={"is_active": true}
+├── [元数据过滤] (所有模式共用 — v1.6：检索全库不过滤)
+│   ChromaDB where={"is_active": true}   # doc_type 仅存 chunk metadata 供评估分析
 │
 └── [自适应截断] (所有模式共用)
     AdaptiveK.apply(docs, min_score, min_chunks, max_chunks)
@@ -960,15 +958,15 @@ query ──┬──→ BGE-M3 encode → vec → ChromaDB.query(vec, top_k=20)
 #### 4.1.3 RerankedRetriever（混合 + 精排）
 
 ```
-HybridRetriever(query, top_k=60)  # 扩大候选池
+HybridRetriever(query, top_k=vector.top_k × candidates_multiplier)  # 候选池 = 20 × 1.5 = 30
     │
-    ▼ (60 条粗排结果)
-    RRF 融合 → 去重 → Top-20
+    ▼ (30 条粗排结果)
+    RRF 融合 → 去重 → 截断 200 字符后送入精排
     │
-    ▼ (20 条候选)
+    ▼ (30 条候选)
     BGE-Reranker Cross-Encoder:
-        for each (query, chunk) pair → relevance_score
-        耗时: 20 × ~30ms = ~600ms (ThreadPool-3 并行)
+        for each (query, chunk[:200]) pair → relevance_score
+        耗时: 实测 ~816ms/30 候选（截断 200 字符；全文推理 2248ms 曾频繁触发 2s 超时降级）
     │
     ▼
     按 relevance_score 降序 → Top-5 → AdaptiveK
@@ -1014,23 +1012,19 @@ class AdaptiveK:
 
 **设计教训（v1.2 根因记录）**：v1.0 的 AdaptiveK 是"共享组件但伪代码只建模余弦语义" — min_score=0.45 与 RRF 量级 ~0.03 在同一文档中定义却未做量级交叉检查，导致 hybrid 模式所有 RRF 分数被滤掉只剩保底 3 条（评估实测 src=3 vs vector 的 8 条，faithfulness 被拉低）。v1.2 起建立"分数语义契约"：两个消费检索分数的组件（AdaptiveK、RefusalCheck）按模式分别使用语义正确的信号。
 
-**③ MetadataFilter（元数据范围控制）**：
+**③ MetadataFilter（doc_type 标记 — v1.6：检索全库不过滤）**：
 
 ```python
 class MetadataFilter:
-    RULES = {
-        "hr_policy":    {"doc_type": ["handbook"]},
-        "compliance":   {"doc_type": ["compliance", "handbook"]},
-        "technical":    {"doc_type": ["technical", "architecture"]},
-        "general":      {},  # 不限
-    }
-    
     def classify(self, query: str) -> str:
-        """基于关键词匹配判断 query 类型（零额外延迟）"""
-        for category, rule in self.RULES.items():
-            for kw in ConfigRegistry.get(f"doc_types.{category}.keywords"):
-                if kw.lower() in query.lower():
-                    return category
+        """v1.6 起恒返回 "general"：doc_type 关键词分类已删除。
+
+        删除根因：静态关键词表不可维护且无法验证正确性（"安全"把 technical
+        问题误路由到 compliance、it_security_policy 被过滤，评估实测 CP 下降）。
+        doc_type 仅存于 chunk metadata 供评估分析。扩展点：语料规模增大需
+        范围收敛时，可在此重新引入分类（LLM 分类/加权方案），当前全库检索
+        的原因：语料规模小无性能压力 + 置信度/拒答层已覆盖相关性兜底。
+        """
         return "general"
 ```
 
@@ -1071,9 +1065,8 @@ retrieval:
 
 ```python
 # Retriever.retrieve() 中:
+# v1.6：where 不含 doc_type（检索全库不过滤），doc_type 仅作 metadata 标记
 where = {"is_active": True}
-if doc_type_filter:
-    where["doc_type"] = doc_type_filter
 expire_where = expire_filter.get_where_clause()
 if expire_where:
     where = {"$and": [where, expire_where]}
@@ -1110,13 +1103,23 @@ results = chroma.query(vec, where=where, ...)
 #### 模块定位
 Cross-Encoder 精排模块，对粗排候选做逐对打分。在 `config.reranker.enabled=true` 且 `retrieval.mode=hybrid+rerank` 时启用。
 
+#### 设计决策记录（实测依据）
+
+| 决策 | 依据（实测） |
+|------|-------------|
+| 输入截断 200 字符 | 全文推理 2248ms 超 2s 阶段预算 → 评估日志大量 rerank_degraded；截断后 ~816ms（30 候选）。黄金信号在 chunk 开头（heading_path 前缀） |
+| 候选池 = top_k(20) × candidates_multiplier(1.5) = 30 | 60 候选（×3）推理 ~1.8s 贴死 2s 超时 → 频繁降级；30 候选留 1.1s 余量 |
+| 模型加载互斥锁（R8） | R4 评估并发 5 首触：无锁时 3 线程同时加载 CrossEncoder 到 MPS，设备初始化竞争使加载从 ~3.4s 爆炸到 ~47.8s（5 样本降级）；`threading.Lock` double-checked 串行化加载 |
+| max_workers = 5（R8） | 容量模型：最坏延迟 = ceil(并发/worker) × T(816ms) ≤ 2s 预算 → 5 并发 1 轮 0.82s、10 并发 2 轮 1.63s。注：5 路 MPS 并发推理无放大未经实测，若退化 >1.6s/次应回退 4 |
+| 预热排除在阶段超时外 | 首次加载 ~3.4s > 2s 预算，warmup 由独立 wait_for(180) 保护；锁修后并发首触只加载一次 |
+
 #### 输入输出接口
 
 ```python
 @dataclass
 class RerankerInput:
     query: str
-    candidates: List[ScoredDoc]       # 粗排候选（≤ 20 条）
+    candidates: List[ScoredDoc]       # 粗排候选（top_k × candidates_multiplier = 30）
 
 @dataclass
 class RerankerResult:
@@ -1138,10 +1141,10 @@ class Reranker:
     
     def rerank(self, query: str, candidates: List[ScoredDoc]) -> RerankerResult:
         # 组装 (query, doc) pairs
-        pairs = [(query, doc.text) for doc in candidates]
+        pairs = [(query, doc.text[:200]) for doc in candidates]  # 截断 200 字符（实测决策，见下方 R8 注记）
         
         # Cross-Encoder 批量打分
-        scores = self.model.predict(pairs)  # 每对 ~30ms
+        scores = self.model.predict(pairs)  # 实测 ~816ms/30 候选（截断后）
         
         # 重新排序
         for doc, score in zip(candidates, scores):
@@ -1389,24 +1392,19 @@ class RefusalCheck:
             top1_sim = getattr(retrieval_result, "vector_top1_sim", None)
             if top1_sim is not None and top1_sim < self.confidence_threshold:
                 return RefusalDecision(refuse=True, reason="low_confidence")
-        
-        # Rule 3: 超出知识库范围（启发式）
-        for kw in ConfigRegistry.get("refusal.rules.out_of_scope_keywords"):
-            if kw in query:
-                return RefusalDecision(refuse=True, reason="out_of_scope")
-        
-        # Rule 4: 安全敏感
+
+        # v1.6：out_of_scope 关键词层已删除（静态黑名单覆盖不全且误伤，置信度信号
+        # 已覆盖其正确场景）。扩展点：日后如需零成本快速拦截明显越界，可在此重新
+        # 引入启发式层。OOS 判定 = 空结果 + 置信度信号两层。
+
+        # Rule 3: 安全敏感（保留：危险内容拦截不依赖"是否相关"）
         for kw in ConfigRegistry.get("refusal.rules.sensitive_keywords"):
             if kw in query:
                 return RefusalDecision(refuse=True, reason="safety")
         
         return RefusalDecision(refuse=False)
 
-    RESPONSES = {
-        "low_confidence": "抱歉，我无法在内部知识库中找到与您问题足够相关的信息。建议您尝试换一种表述方式，或联系相关部门获取帮助。",
-        "out_of_scope": "您的问题超出了内部知识库的覆盖范围。我只能回答与公司内部文档相关的问题。",
-        "safety": "您的问题涉及安全敏感内容，我无法提供相关回答。",
-    }
+    # 文案唯一事实源：config.yaml refusal.responses（文档不重复承载，避免漂移）
 ```
 
 ---
@@ -2123,17 +2121,19 @@ pii_redact_total, injection_blocked_total
 **③ Answer Compliance（答案合规性，自研 LLM judge）**
 
 - **核心定义**：答案是否严格忠于文档，三类扣分行为：额外新增文档不存在的信息（幻觉）/ 遗漏原文关键要求、数字、流程 / 篡改原文数值、条款、时效。基础 ≥0.8，进阶 ≥0.9
-- **打分规则**（5 分制 → 归一到 0~1）：
+- **打分规则**（6 档制，v1.6 → 归一到 0~1）：
+  - 0 分：回答未回答问题（如"文档中未包含/无法回答"类表述），或答案与问题无关
   - 5 分：无新增、无遗漏、无篡改，完全贴合原文
   - 4 分：微小无关补充，无关键信息丢失
   - 3 分：少量次要信息遗漏 / 轻微改写
   - 2 分：重要数字 / 条款遗漏或修改
   - 1 分：大量编造，核心内容错误
-- **聚合方式**：`Answer Compliance = Σ(LLM 打分) / (样本数 × 5)`，即 score/5 连续分取均值。**达标语义 = 平均分 ≥0.9**（4 分回答贡献 0.8，5 分足够多即可达标）
-- **Judge Prompt**（实现原文）：
+- **聚合方式**（v1.6）：0 分样本计入 `unanswered_rate` 单独统计，**排除出 compliance 均值**（立场 a：compliance 测"有答案时答案是否合规"，检索失败导致的"诚实无法回答"不惩罚 compliance）；`Answer Compliance = Σ(非 0 打分) / (非 0 样本数 × 5)`
+- **Judge Prompt**（实现原文，以 eval/runner.py 为准）：
 
 ```
-你是合规打分裁判。给定【参考文档片段】和【模型回答】，按5档打分：
+你是合规打分裁判。给定【参考文档片段】和【模型回答】，按6档打分：
+0分：回答未回答问题（如"文档中未包含/无法回答/无法给出确切答案"类表述），或答案与问题无关；
 5分：完全依据文档，不添加、不遗漏、不修改任何规则/数字；
 4分：仅极少量无关补充，关键信息完整准确；
 3分：次要信息轻微遗漏，核心规则无错误；
@@ -2201,6 +2201,7 @@ pii_redact_total, injection_blocked_total
 #### 附加性能指标
 
 - **Timeout Rate**：超时样本占比（v1.2 新增，单独统计不丢弃 — 符合可观测、故障诊断交付要求）。超时判定：`resp.partial` 或（非拒答且空回答且无 sources 且非缓存）
+- **Unanswered Rate**：Compliance 0 分样本占比（v1.6 新增 — 区分"检索失败/诚实无法回答"与"答了但不合规"，见 §6.3 ③ 聚合方式）
 
 #### 三配置对比实验流程
 
@@ -2276,15 +2277,29 @@ bad_cases = db.query("""
 
 #### Issue Diagnosis 模板
 
+> 示例数据取自真实案例（R2→R3 评估，详见 docs/eval-history.md）；交付评估报告时
+> 必须以 eval_history 真实 run 数据填写，禁止沿用本模板数字。
+
+```
+问题编号: ISSUE-<自增编号>
+问题现象: <一句话现象，附量化口径>
+日志证据:
+  [<评估 run 时间>] stage_timeout stage=rerank timeout=2s
+  [<评估 run 时间>] rerank_degraded query=... top_n=5
+根因分析: <基于日志+代码的根因链，禁止猜测>
+修复方案: <具体改动 + 配置变更>
+修复效果: <before/after 指标（eval_history 同 test_set_hash 对比），改进 ≥ 10%>
+```
+
+示例（R2→R3 真实案例）：
 ```
 问题编号: ISSUE-001
-问题现象: Reranker 超时导致 P95 延迟超过 15s
+问题现象: Reranker 超时频繁降级，rerank P95 4171ms
 日志证据:
-  [2025-08-12 14:32:01] stage_timeout stage=rerank timeout=2s
-  [2025-08-12 14:32:03] circuit_open component=reranker failure_count=3
-根因分析: Reranker ThreadPool(2) 不足以覆盖 5 并发，排队延迟累积
-修复方案: ThreadPool 扩容至 3，增加 circuit_breaker 熔断后自动降级 hybrid
-修复效果: P95 延迟 15.2s → 7.8s（降 48.7%）
+  [2026-08-13] stage_timeout stage=rerank timeout=2s（评估日志大量）
+根因分析: 60 候选 × 全文推理实测 2248ms 超 2s 阶段预算
+修复方案: 输入截断 200 字符（~782ms）+ candidates_multiplier 1.5（30 候选）
+修复效果: rerank P95 4171ms → 2729ms（降 35%，与 docs/eval-history.md 一致）
 ```
 
 #### 评估历史持久化 & 自动对比
@@ -2360,12 +2375,12 @@ def compare_runs(run_id_before: str, run_id_after: str) -> ComparisonReport:
         improvements=improvements
     )
 
-# 示例输出:
+# 示例输出（数值为演示占位，真实对比数据见 docs/eval-history.md）:
 # metric                    before  after   delta
-# faithfulness              0.82    0.88    +7.3%
-# context_precision         0.63    0.74    +17.5%  ← 超过 10% 阈值 ✅
-# answer_compliance         0.78    0.91    +16.7%  ← 超过 10% 阈值 ✅
-# p95_latency_ms            15200   7800    -48.7%
+# faithfulness              <run A> <run B> <delta>
+# context_precision         <run A> <run B> <delta>  ← 超过 10% 阈值 ✅
+# answer_compliance         <run A> <run B> <delta>
+# p95_latency_ms            <run A> <run B> <delta>
 ```
 
 **对比流程**：
@@ -2486,7 +2501,7 @@ python -m eval.report --compare <run_id_before> <run_id_after>
 
 | Reranker | 架构 | 对 | 延迟 |
 |------|------|------|:---:|
-| **BGE-Reranker-v2-m3** ✅ | Cross-Encoder | 20 × 30ms | 600ms |
+| **BGE-Reranker-v2-m3** ✅ | Cross-Encoder | 30 候选截断 200 字符 | ~816ms（实测，见 §4.4） |
 
 **选择**: BGE-Reranker-v2-m3 — 与 BGE-M3 同系列，中英双语，本地零成本。
 
@@ -2743,92 +2758,41 @@ echo "评估完成: data/eval/results/report.csv"
 
 ### 10.2 结构化日志样例
 
+> 真实样例（R4 评估日志 data/logs/eval-20260813_201235.log，字段定义以 docs/log-field-dictionary.md 为唯一权威）。格式：头部四字段平铺（timestamp → level → event → module）+ 业务数据分组嵌套。
+
 ```json
-{
-  "timestamp": "2025-08-12T14:32:01.234Z",
-  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "session_id": "s-abc123",
-  "event": "retrieval_complete",
-  "module": "retriever",
-  "retrieval_mode": "hybrid+rerank",
-  "doc_type_filter": "handbook",
-  "top_k": 20,
-  "candidates_returned": 18,
-  "latency_ms": 250,
-  "status": "ok"
-}
+{"timestamp": "2026-08-13T12:12:47.404Z", "level": "info", "event": "retrieval_complete", "module": "retrieval",
+ "request": {"id": null},
+ "retrieval": {"mode": "vector-only", "coarse_candidates": 8, "final_chunks": 8,
+              "top1_score": 0.6689, "vector_top1_sim": 0.6689,
+              "doc_type_filter": "general", "injection_blocked": 0, "latency_ms": 191},
+ "chunks": [{"heading_path": "第二章 薪酬与福利", "score": 0.6534, "source_file": "employee_handbook_v1.1.pdf"},
+            {"heading_path": "第一章 休假制度", "score": 0.6243, "source_file": "employee_handbook_v1.1.pdf"}]}
 
-{
-  "timestamp": "2025-08-12T14:32:03.456Z",
-  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "event": "generation_complete",
-  "module": "generator",
-  "provider": "deepseek",
-  "model": "deepseek-chat",
-  "token_prompt": 1245,
-  "token_completion": 380,
-  "token_total": 1625,
-  "latency_ms": 3200,
-  "status": "ok"
-}
-
-{
-  "timestamp": "2025-08-12T14:35:00.000Z",
-  "request_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-  "event": "injection_detected",
-  "module": "scanner",
-  "severity": "high",
-  "chunk_id": "uuid-abc",
-  "source_file": "technical_spec_v3.pdf",
-  "matched_pattern": "ignore all previous instructions",
-  "action": "block"
-}
-
-{
-  "timestamp": "2025-08-12T14:36:00.000Z",
-  "request_id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
-  "event": "circuit_open",
-  "module": "reranker",
-  "component": "reranker",
-  "failure_count": 3,
-  "recovery_timeout": 60,
-  "degraded_mode": "hybrid"
-}
+{"timestamp": "2026-08-13T12:12:48.264Z", "level": "info", "event": "generation_complete", "module": "chat",
+ "request": {"id": null},
+ "llm": {"provider": "deepseek", "model": "deepseek-chat",
+         "tokens_prompt": 1535, "tokens_completion": 27, "latency_ms": 786},
+ "answer": {"preview": "根据《员工手册》第一章休假制度，员工请病假须提供**二级甲等以上医院**出具的病假证明。",
+            "truncated": false, "length": 44}}
 ```
 
 ### 10.3 字段字典
 
-| 字段 | 类型 | 说明 | 必填 | 示例 |
-|------|------|------|:---:|------|
-| `timestamp` | ISO 8601 | 日志产生时间 | ✅ | `2025-08-12T14:32:01.234Z` |
-| `request_id` | UUID | 请求链路唯一 ID | ✅ | `a1b2c3d4-...` |
-| `session_id` | string | 多轮会话 ID | ✅ | `s-abc123` |
-| `event` | string | 事件名（见 6.2 核心埋点事件） | ✅ | `retrieval_complete` |
-| `module` | string | 模块名 | ✅ | `retriever` |
-| `latency_ms` | int | 该阶段耗时（毫秒） | ✅ | `250` |
-| `status` | string | ok / timeout / error / degraded | ✅ | `ok` |
-| `retrieval_mode` | string | vector-only / hybrid / hybrid+rerank | 检索时 | `hybrid+rerank` |
-| `tokens_used` | int | Token 消耗数 | 生成时 | `1625` |
-| `token_prompt` | int | Prompt Token 数 | 生成时 | `1245` |
-| `token_completion` | int | Completion Token 数 | 生成时 | `380` |
-| `cache_hit` | bool | 是否缓存命中 | ✅ | `false` |
-| `refused` | bool | 是否触发拒答 | ✅ | `false` |
-| `refusal_reason` | string | low_confidence / out_of_scope / safety | 拒答时 | `low_confidence` |
-| `circuit_breaker` | string | 熔断状态 closed/open/half_open | 熔断事件时 | `closed` |
-| `error` | string | 异常堆栈 | 异常时 | `StageTimeoutError` |
-| `doc_type_filter` | string | 元数据过滤类型 | 检索时 | `handbook` |
-| `provider` | string | LLM Provider | 生成时 | `deepseek` |
-| `model` | string | LLM 模型名 | 生成时 | `deepseek-chat` |
-| `doc_hash` | string | 文档 SHA-256 | 入库时 | `sha256-abc123...` |
+字段定义与全部事件字典见交付物 **docs/log-field-dictionary.md**（唯一权威，§6.2 只保留事件清单）。本节不重复承载字段表，避免两处漂移。
 
 ### 10.4 评估输出 CSV 样例
 
+列定义与实现以 `eval/report.py` 为准（14 列）。样例为 R4 实测数据（run `eval_20260813_201247_bc895179`，完整对比见 docs/eval-history.md）：
+
 ```csv
-config,faithfulness,context_precision,answer_compliance,style_consistency,refusal_appropriateness,p50_ms,p95_ms,avg_tokens,cache_hit_rate,refusal_rate
-vector-only,0.82,0.63,0.78,0.81,0.85,3200,7800,1850,12.5%,8.3%
-hybrid,0.85,0.71,0.83,0.82,0.87,3800,8500,1720,14.2%,6.8%
-hybrid+rerank,0.88,0.74,0.91,0.86,0.93,4500,8900,1625,15.1%,5.2%
+config,faithfulness,context_precision,answer_compliance,refusal_appropriateness,style_consistency,p50_ms,p95_ms,avg_tokens,avg_prompt_tokens,avg_completion_tokens,avg_chunks,timeout_rate,unanswered_rate,total_requests
+vector-only,0.9433,0.8513,1.0,0.9846,0.8852,1346,2700,1505,1447,58,5.54,0.0,0.2222,65
+hybrid,0.9314,0.7214,1.0,0.9846,0.8852,1454,2478,1917,1858,59,7.72,0.0,0.2037,65
+hybrid+rerank,0.9006,0.7356,1.0,0.8615,0.8783,3100,50211,1167,1115,51,4.32,0.0,0.3696,65
 ```
+
+> 注：hybrid+rerank 的 P95=50211ms 为 R4 已知异常（并发首触模型加载竞争，根因见 §4.4 R8 记录），修复后以重跑结果为准。
 
 ### 10.5 指标计算公式说明
 
@@ -2860,11 +2824,11 @@ RRF_score(d) = Σ_{r ∈ R} 1 / (k + rank_r(d))
 - 若 chunk 未出现在某结果集中，对应项贡献 0
 ```
 
-**Answer Compliance（自研 LLM judge，v1.2 落地）**：
+**Answer Compliance（自研 LLM judge，v1.6 六档制）**：
 ```
-单样本: LLM judge 按 5 分制打分（prompt 见 §6.3）
-聚合: Answer Compliance = Σ(打分) / (样本数 × 5)   ← score/5 连续分取均值
-达标语义: 平均分 ≥ 0.9（4 分贡献 0.8，5 分足够多即可达标）
+单样本: LLM judge 按 6 档打分（0=未回答，1-5 合规度；prompt 见 §6.3）
+聚合: 0 分样本计入 unanswered_rate 并排除出均值
+      Answer Compliance = Σ(非 0 打分) / (非 0 样本数 × 5)
 ```
 
 **Style Consistency（自研 LLM judge，v1.4 重设计）**：
