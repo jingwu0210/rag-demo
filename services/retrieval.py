@@ -41,6 +41,8 @@ class RetrievalOutput:
     timing_ms: Dict[str, int] = field(default_factory=dict)   # {"retrieval","rerank","total"}
     degraded: bool = False           # 是否降级（rerank 超时/熔断）
     injection_blocked: int = 0
+    # R3: 向量路 top1 余弦分数旁路透传（RefusalCheck 置信度判定用）
+    vector_top1_sim: Optional[float] = None
 
 
 class RetrievalService:
@@ -75,6 +77,17 @@ class RetrievalService:
     async def retrieve(self, query: str, doc_type: str = None) -> RetrievalOutput:
         total_start = time.perf_counter()
 
+        # 读取当前模式，决定粗排是否跳过 AdaptiveK（R7: rerank 候选池独立）
+        mode_cfg = ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
+        need_rerank = (mode_cfg == "hybrid+rerank"
+                       and ConfigRegistry.get("reranker.enabled", True))
+        if need_rerank:
+            # rerank 候选池：粗排不截断，候选数 = top_k × candidates_multiplier（设计 §4.3）
+            coarse_top_k = int(ConfigRegistry.get("retrieval.vector.top_k", 20)
+                               * ConfigRegistry.get("reranker.candidates_multiplier", 3))
+        else:
+            coarse_top_k = 20
+
         # Step 1: 粗排检索（阶段超时；超时 → 空结果继续，触发低置信拒答）
         t0 = time.perf_counter()
         result = None
@@ -82,12 +95,12 @@ class RetrievalService:
             result = await self.guard.with_stage_timeout(
                 "retrieval",
                 self._call(self.retriever.retrieve, self._retrieval_pool,
-                           query, 20, doc_type))
+                           query, coarse_top_k, doc_type, need_rerank))
         except StageTimeoutError:
             logger.warning("retrieval_stage_timeout", query=query)
         retrieval_ms = int((time.perf_counter() - t0) * 1000)
 
-        mode = result.mode if result else ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
+        mode = result.mode if result else mode_cfg
         candidates = result.docs if result else []
         degraded = False
         rerank_ms = 0
@@ -131,4 +144,5 @@ class RetrievalService:
             },
             degraded=degraded,
             injection_blocked=blocked,
+            vector_top1_sim=(result.vector_top1_sim if result else None),
         )

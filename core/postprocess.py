@@ -83,26 +83,39 @@ class RefusalCheck:
     def evaluate(self, query: str, retrieval_result, mode: str = None) -> Tuple[bool, Optional[str]]:
         """返回 (是否拒答, 拒答原因)；retrieval_result 需有 .docs 属性
 
-        分数语义按检索模式区分（smoke 测试发现的误拒答根因）：
-        - vector-only: score 是余弦相似度（0-1），可与 confidence_threshold 比较
-        - hybrid: score 是 RRF 分数（~0.03 量级），与阈值不可比 → 仅空结果拒答
-        - hybrid+rerank: score 是 CrossEncoder 分数（无界），与阈值不可比 → 仅空结果拒答
+        OOS 分层防线（R3 重设计，评估数据驱动）：
+        ① 空结果 → 拒答（所有模式）
+        ② 置信度信号 → 拒答：
+           - vector-only: docs[0].score 余弦（0-1）与 confidence_threshold 比较
+           - hybrid / hybrid+rerank: 用 vector_top1_sim 旁路信号（余弦 0-1 有绝对语义）。
+             RRF 分数是语料内相对排名，OOS 问题的 top1 RRF 照样高分 → 拦不住 OOS
+             （评估实测 hybrid OOS 漏拒 8/10 的根因）；CrossEncoder 分数无界不可比。
+             旁路信号缺失（旧结构/mock）时回退到"仅空结果拒答"。
+        ③ 关键词 → 省钱启发式（快速拦截明显越界，覆盖不全，非防线）
         """
         docs = getattr(retrieval_result, "docs", None) or []
         mode = mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
 
-        # 规则 1: 空结果 → low_confidence；vector-only 额外做分数阈值比较
+        # 规则 1: 空结果 → low_confidence（所有模式）
         if not docs:
             return True, "low_confidence"
-        if mode == "vector-only" and docs[0].score < self.confidence_threshold:
-            return True, "low_confidence"
 
-        # 规则 2: query 命中 out_of_scope 关键词 → out_of_scope
+        # 规则 2: 置信度不足 → low_confidence（按模式选择信号）
+        if mode == "vector-only":
+            if docs[0].score < self.confidence_threshold:
+                return True, "low_confidence"
+        else:
+            # hybrid 系：用向量路 top1 余弦旁路信号（RetrievalResult.vector_top1_sim）
+            top1_sim = getattr(retrieval_result, "vector_top1_sim", None)
+            if top1_sim is not None and top1_sim < self.confidence_threshold:
+                return True, "low_confidence"
+
+        # 规则 3: query 命中 out_of_scope 关键词 → out_of_scope（启发式，覆盖不全）
         for kw in ConfigRegistry.get("refusal.rules.out_of_scope_keywords", []) or []:
             if kw in query:
                 return True, "out_of_scope"
 
-        # 规则 3: query 命中 sensitive 关键词 → safety
+        # 规则 4: query 命中 sensitive 关键词 → safety
         for kw in ConfigRegistry.get("refusal.rules.sensitive_keywords", []) or []:
             if kw in query:
                 return True, "safety"
