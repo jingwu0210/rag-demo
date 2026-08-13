@@ -12,6 +12,7 @@
 | v1.0 | 2025-08-12 | 初始版本：十大章节完整设计 |
 | v1.1 | 2026-08-13 | 新增 §6.4 语料设计；标题与文件名去日期化，改由本节追踪版本 |
 | v1.2 | 2026-08-13 | 五大指标完整计算方案落地（§6.3 重写）：Answer Compliance 改自研 LLM judge 5 分制 score/5 均值；Style Consistency 落地 pairwise judge 固定种子；Refusal 四场景纯规则含漏拒；新增 Timeout Rate 附加指标。检索分数语义契约（§4.3 AdaptiveK 按 mode 区分阈值 + hybrid_min_score；§4.6 RefusalCheck OOS 分层重设计 — hybrid 系用 vector_top1_sim 旁路信号）；sources 取消 500 字符截断；rerank 候选池独立（skip_adaptive） |
+| v1.4 | 2026-08-13 | 评估失真五点修复：Style Consistency 重设计（pairwise → vs 风格规范绝对打分，跨配置可比）；测试集 53→65 条（精确术语类/复杂多跳类/边界模糊类三类区分度样本）；Token/Chunk 分解观测（avg_prompt_tokens/avg_completion_tokens/avg_chunks_per_call/timeout_rate 列） |
 | v1.3 | 2026-08-13 | 日志系统升级（§6.2）：JSON 格式头部四字段平铺 + 业务分组嵌套（timestamp 行首）；8 事件正常路径埋点（chat_request_start/cache_check/retrieval_complete/rerank_complete/generation_complete/refusal_triggered/pii_redacted/chat_request_end）；query 截断 200 记录 + answer 预览 200；eval.sh 日志按时间戳独立文件 + stdout/stderr 分流 |
 
 ---
@@ -2156,27 +2157,29 @@ pii_redact_total, injection_blocked_total
 | OOS 漏拒 | OOS 问题 但 未拒答（LLM 编造答案） | 0 |
 
 - **计算公式**：`Refusal Appropriateness = 正确处理样本数 / 总测试样本数`
-- **评测集要求**：混入 20% out-of-scope 问题（v1.2 测试集 53 条含 10 条 OOS）
+- **评测集要求**：混入 20% out-of-scope 问题 + 三类区分度样本（v1.4 测试集 65 条含 12 条 OOS）：
+  - **精确术语类**（ISO 27001/429/SEV-1 等）— 发挥 BM25 优势，否则测试集对 hybrid 不公平
+  - **复杂多跳类**（需多 chunk 拼合）— 让 Faithfulness 对检索完整性敏感
+  - **边界模糊类**（关键词误伤/safety 边界/半相关）— 让 Refusal 指标有区分度
+  （v1.2 的 53 条测试集 OOS 全是极端越界样本 → refusal 全满分无区分度；问题全为单 chunk 可答 → faith 三配置无差异）
 
-**⑤ Style Consistency（风格一致性，自研 pairwise LLM judge）**
+**⑤ Style Consistency（风格一致性，自研 LLM judge — v1.4 重设计）**
 
-- **核心定义**：所有回答的语气、格式、专业度、排版结构是否统一（正式企业话术、统一分点格式，不出现口语化/随意回答）。基础 ≥0.8，进阶 ≥0.85
-- **实现**：Pairwise 对比 — 从当前配置所有回答中**固定种子**（`random.Random(42)`）抽 20 对，LLM judge 对每对打 5 分风格相似度分；**固定种子保证同一测试集每次评估结果完全一致（before/after 可对比）**
+- **核心定义**：所有回答的语气、格式、专业度、排版结构是否符合企业知识库回答规范（正式企业话术、结论先行、分点排版、引用来源、无口语化）。基础 ≥0.8，进阶 ≥0.85
+- **实现（v1.4）**：**每个答案 vs 风格规范绝对打分** — 全量非拒答答案独立打 1-5 分（无抽样）。替换 v1.3 的 pairwise 方案：pairwise 测的是"配置内答案互比方差"，且不同配置抽样对完全不同 → **跨配置不可比**（评估实测 vector 0.86 / hybrid 0.63 断崖的根因）；绝对打分用同一规范同一 judge 全量答案，跨配置可比且完全可复现
 - **Judge Prompt**（实现原文）：
 
 ```
-对比两段AI回答的写作风格、正式程度、排版结构、话术规范，打1-5分：
-5=高度统一，4=轻微差异，3=中等差异，2=差异明显，1=完全不同
-仅输出数字。
+你是写作风格裁判。对照以下企业知识库回答规范，给回答打 1-5 分：
+规范：正式企业话术、结论先行、分点/结构化排版、引用来源标注、无口语化表达。
+5=完全符合规范，4=基本符合，3=部分符合，2=明显偏离，1=完全不符合。
+只输出数字分数。
 
-回答A：
-{ans1}
-
-回答B：
-{ans2}
+回答：
+{answer}
 ```
 
-- **计算公式**：`Style Consistency = Σ(配对分数) / (配对数 × 5)`
+- **计算公式**：`Style Consistency = Σ(分数) / (答案数 × 5)`
 
 #### 指标区分速查表
 
@@ -2186,7 +2189,7 @@ pii_redact_total, injection_blocked_total
 | Faithfulness | Ragas | 生成层：回答是否基于文档、无幻觉 | 提升检索精度、强约束 Prompt |
 | Answer Compliance | 自研 LLM judge | 不增不漏不改原文 | 优化切片、Prompt 防幻觉 |
 | Refusal Appropriateness | 纯规则四场景 | 拒答逻辑是否准确 | 置信阈值调优、OOS 分层防线 |
-| Style Consistency | 成对 LLM judge（固定种子） | 输出话术统一 | 统一 System Prompt 风格约束 |
+| Style Consistency | 自研 LLM judge（vs 风格规范绝对打分，全量答案） | 输出是否符合话术规范 | 统一 System Prompt 风格约束 |
 
 #### 附加性能指标
 
@@ -2847,11 +2850,11 @@ RRF_score(d) = Σ_{r ∈ R} 1 / (k + rank_r(d))
 达标语义: 平均分 ≥ 0.9（4 分贡献 0.8，5 分足够多即可达标）
 ```
 
-**Style Consistency（自研 pairwise judge，v1.2 落地）**：
+**Style Consistency（自研 LLM judge，v1.4 重设计）**：
 ```
-固定种子 random.Random(42) 抽 N 对回答（N=20），每对 5 分风格相似度打分
-得分 = 所有 pair 的平均分 / 5
-固定种子保证同一测试集每次评估结果完全一致（before/after 可对比）
+每个答案 vs 风格规范绝对打分 1-5（全量非拒答答案，无抽样）
+得分 = Σ(分数) / (答案数 × 5)
+跨配置可比（同一规范同一 judge）；完全可复现（无抽样）
 ```
 
 **Refusal Appropriateness（纯规则，v1.2 落地）**：
