@@ -280,7 +280,7 @@
 | FR-6.3 | Bad Case 采集 | — | request_metrics 表 | `SELECT * FROM request_metrics WHERE refused OR timeout OR faithfulness < 0.7` | ⚪ 文档引用 |
 | NFR-1.1 | 90% 请求 ≤ 10s | ≥ 90% | ResilienceGuard + Cache | `eval.sh` 中 ≥50 个请求 → P90 延迟聚合（达标口径 P90，对应 assignment "90% ≤10s"；P95 仅观测） | 🟢 自动化 |
 | NFR-1.2 | 并发 ≥ 5 | ≥ 5 | Semaphore(10) 上限 + ThreadPool 隔离 | 并发压测：5 请求同时发 → P95 ≤ 10s + 无报错 + 无 429（压测用更严的 P95 上限；与 NFR-1.1 的 P90 达标口径不冲突） | 🔵 集成测试 |
-| NFR-2 | 质量指标 | 见 1.2 | EvalService + Ragas | `eval.sh` 产出全部 5 项指标值 | 🟢 自动化 |
+| NFR-2 | 质量指标 | 见 1.2 | EvalService + Ragas | `eval.sh` 产出全部 5 项指标值 + before/after 对比（§1.2 目标值为参考基线：验收判定以产出与 ≥10% 改进对比为准；交付报告中逐项对照目标值标注达标/未达标） | 🟢 自动化 |
 | NFR-3.1 | Token 成本估算 | 千次 | Generator token counting | `eval.sh` 聚合千次 cost + 第七章选型论证 | 🟢 自动化 |
 | NFR-3.2 | 模型版本选择理由 | 文档 | 第七章选型论证 | 三 provider 对比实验数据 | ⚪ 文档引用 |
 | NFR-5 | 配置驱动切换 | — | ConfigRegistry (100+ 配置项) | 架构即证明：改 yaml 不动代码 | 🟡 设计保证 |
@@ -581,6 +581,11 @@ Assignment 要求 **"support ≥ 5 concurrent requests"** — 至少 5 个并发
 | 弹性降级 | 阶段超时 + 熔断器 | 3s/2s/5s | 即使 10 并发打满，超时/熔断保证系统不自爆 |
 
 **验证标准**：不是"Semaphore 值是多少"，而是 **"5 并发压测下 P95 ≤ 10s、无报错、无 429"**。
+
+> **数值唯一事实源**：超时三元组（检索 3s / 重排 2s / 生成 5s）、请求硬超时 9s、
+> Semaphore(10)、熔断阈值（3 次 / 60s）、线程池大小均为 **config.yaml 驱动**。
+> 本文档各章节出现的这些数字仅为设计默认值展示，修改以 config.yaml + 代码为准；
+> 本章表为本节权威陈述，其余章节出现处不重复维护。
 
 ```yaml
 concurrency:
