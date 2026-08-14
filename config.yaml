@@ -54,6 +54,10 @@ retrieval:
   fusion:
     algorithm: rrf
     rrf_k: 60
+    vector_weight: 1.0        # P2a: 向量路 RRF 权重
+    bm25_weight: 0.8          # P2a: BM25 路软降权（保留术语强命中的机会）
+    vector_sim_threshold: 0.45  # P2c: 融合后 vec_sim 硬过滤（实测依据：术语类 17 条答案依据
+                                 # chunk 余弦全部 ≥0.4781，0.45 零误杀；普通中文样本全部 >0.45）
   adaptive:
     enabled: true
     min_score: 0.45                # vector-only 用：余弦相似度阈值（0-1 有绝对语义）

@@ -117,9 +117,25 @@ class RetrievalService:
                 # 导致永远冷启动降级。预热只在模型未加载时发生（幂等）。
                 warmup = self._call(self.reranker.ensure_loaded, self._rerank_pool)
                 await asyncio.wait_for(warmup, timeout=180)
-                candidates = await self.guard.with_stage_timeout(
+                # P1h 双通道 RRF 二次融合（R4 排序失真修复：精排不独裁）：
+                # 1) 记录粗排位次 = rerank 前候选列表 index + 1（rank 基准 1-based，
+                #    与 core/fusion.py 的 1/(k+rank+1) 一致）
+                coarse_rank = {d.chunk_id: i + 1 for i, d in enumerate(candidates)}
+                # 2) rerank 全量排序（top_n=None 不截断），rerank 位次 = 全排序 index + 1
+                ranked = await self.guard.with_stage_timeout(
                     "rerank", self._call(self.reranker.rerank, self._rerank_pool,
-                                         query, candidates))
+                                         query, candidates, None))
+                rerank_rank = {d.chunk_id: i + 1 for i, d in enumerate(ranked)}
+                # 3) 二次 RRF：final = 1/(rrf_k+粗排位次) + 1/(rrf_k+rerank位次)
+                #    rrf_k 与粗排第一次融合共用 retrieval.fusion.rrf_k（config 单源，铁律 4）
+                rrf_k = int(ConfigRegistry.get("retrieval.fusion.rrf_k", 60))
+                for doc in candidates:
+                    doc.score = (1.0 / (rrf_k + coarse_rank[doc.chunk_id])
+                                 + 1.0 / (rrf_k + rerank_rank.get(
+                                     doc.chunk_id, len(ranked) + 1)))
+                # 4) 按 final 降序截取 top_n 作为最终结果
+                candidates = sorted(candidates, key=lambda d: d.score,
+                                    reverse=True)[:top_n]
             except (StageTimeoutError, CircuitBreakerOpen):
                 # 降级：跳过 rerank，直接用粗排结果截断 top_n 兜底
                 degraded = True

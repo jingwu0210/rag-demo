@@ -24,6 +24,8 @@ class ScoredDoc:
     text: str
     score: float
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # P2c: 融合时携带的向量路余弦分（0-1，有绝对语义）；纯 BM25 命中为 None
+    vec_sim: Optional[float] = None
 
 
 @dataclass
@@ -71,6 +73,20 @@ class AdaptiveK:
         if self.max_chunks:
             kept = kept[: self.max_chunks]
         return kept
+
+
+def apply_vec_sim_filter(docs: List[ScoredDoc], threshold: Optional[float]) -> List[ScoredDoc]:
+    """P2c: 融合后按 vec_sim 硬过滤（兜底，发生在 AdaptiveK 之前）
+
+    纯 BM25 命中（vec_sim=None）视为 0 被滤 — 这正是过滤目标：
+    BM25 独中但向量不相关的噪声。threshold=None 时不过滤（关闭过滤）。
+    实测依据：R4 术语类 17 条（ISO 27001/429/SEV/VPN 等）答案依据 chunk
+    与 query 余弦全部 ≥0.4781，0.45 阈值零误杀；普通中文样本全部 >0.45。
+    """
+    if threshold is None:
+        return docs
+    return [d for d in docs
+            if (d.vec_sim if d.vec_sim is not None else 0.0) >= threshold]
 
 
 class BaseRetriever(ABC):
@@ -190,27 +206,40 @@ class BM25Retriever(BaseRetriever):
 
 
 class HybridRetriever(BaseRetriever):
-    """VectorRetriever + BM25Retriever + RRFFusion(k=rrf_k)"""
+    """VectorRetriever + BM25Retriever + 加权 RRFFusion + vec_sim 硬过滤（P2）"""
 
     def __init__(self, chroma_store: ChromaStore, embedder: Embedder):
         super().__init__(chroma_store)
         self._vector = VectorRetriever(chroma_store, embedder)
         self._bm25 = BM25Retriever(chroma_store)
-        self._rrf_k = ConfigRegistry.get("retrieval.fusion.rrf_k", 60)
 
     def retrieve(self, query: str, top_k: int = 20,
                  doc_type_filter: Optional[str] = None,
                  skip_adaptive: bool = False) -> RetrievalResult:
+        # P2 融合参数每次 retrieve 动态读取（与门面"改配置 = 改行为"语义一致）
+        rrf_k = ConfigRegistry.get("retrieval.fusion.rrf_k", 60)
+        vector_weight = ConfigRegistry.get("retrieval.fusion.vector_weight", 1.0)
+        bm25_weight = ConfigRegistry.get("retrieval.fusion.bm25_weight", 0.8)
+        vec_sim_threshold = ConfigRegistry.get(
+            "retrieval.fusion.vector_sim_threshold", 0.45)
         vec_top_k = ConfigRegistry.get("retrieval.vector.top_k", top_k)
         bm25_top_k = ConfigRegistry.get("retrieval.bm25.top_k", top_k)
         where = self.build_where(doc_type_filter)
         vec_docs = self._vector._search(query, vec_top_k, where)
         bm25_docs = self._bm25._search(query, bm25_top_k, doc_type_filter)
-        fused = RRFFusion.fuse(vec_docs, bm25_docs, k=self._rrf_k)
+        fused = RRFFusion.fuse(vec_docs, bm25_docs, k=rrf_k,
+                               vector_weight=vector_weight,
+                               bm25_weight=bm25_weight)
         scored = [ScoredDoc(chunk_id=d["chunk_id"], text=d["text"],
-                            score=d["rrf_score"], metadata=d.get("metadata", {}))
-                  for d in fused[:top_k]]
-        # R2 旁路信号：向量路 top1 余弦分数（0-1），仅供 RefusalCheck 置信度判定
+                            score=d["rrf_score"], metadata=d.get("metadata", {}),
+                            vec_sim=d.get("vec_sim"))
+                  for d in fused]
+        # P2c: 融合后 vec_sim 硬过滤（发生在 AdaptiveK 之前；skip_adaptive
+        # 的 rerank 粗排池走同一路径，候选池同样更干净）
+        scored = apply_vec_sim_filter(scored, vec_sim_threshold)[:top_k]
+        # R2 旁路信号：向量路 top1 余弦分数（0-1），仅供 RefusalCheck 置信度判定。
+        # 语义不变（P2c 过滤不改变它：过滤阈值与置信度阈值同为 0.45，
+        # 过滤后非空 ⟺ 向量路 top1 ≥ 0.45）
         vector_top1_sim = (float(vec_docs[0]["score"]) if vec_docs else None)
         if not skip_adaptive:
             # hybrid: RRF 尺度阈值（hybrid_min_score），非余弦尺度 min_score

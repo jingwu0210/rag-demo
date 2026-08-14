@@ -245,6 +245,167 @@ def test_hybrid_retriever_empty_bm25_side_uses_vector_only():
         assert all(d.score > 0 for d in result.docs)  # rrf 分数（仅 vector 一路贡献）
 
 
+# ── 5.1 P2a/P2c: 加权融合 + 向量阈值过滤 ────────────────────
+
+def test_rrf_fusion_weighted_formula_hand_computed():
+    """P2a: 加权 RRF 公式手算 — score = w_v/(k+rank_v) + w_b/(k+rank_b)"""
+    from core.fusion import RRFFusion
+
+    vec = [
+        {"chunk_id": "a", "text": "A", "score": 0.9},
+        {"chunk_id": "b", "text": "B", "score": 0.8},
+    ]
+    bm25 = [
+        {"chunk_id": "b", "text": "B", "score": 10.0},
+        {"chunk_id": "a", "text": "A", "score": 9.0},
+    ]
+    # doc a: 向量 rank1 + BM25 rank2；doc b: 向量 rank2 + BM25 rank1
+    fused = RRFFusion.fuse(vec, bm25, k=60, vector_weight=1.0, bm25_weight=0.8)
+    by_id = {d["chunk_id"]: d for d in fused}
+    # 手算: a = 1.0/(60+1) + 0.8/(60+2)；b = 1.0/(60+2) + 0.8/(60+1)
+    assert abs(by_id["a"]["rrf_score"] - (1.0 / 61 + 0.8 / 62)) < 1e-9
+    assert abs(by_id["b"]["rrf_score"] - (1.0 / 62 + 0.8 / 61)) < 1e-9
+    # 向量权重更高 → 向量 rank1 的 a 领先于 BM25 rank1 的 b
+    assert by_id["a"]["rrf_score"] > by_id["b"]["rrf_score"]
+    # vec_sim 透传：向量路命中填余弦分；纯 BM25 命中的 doc 为 None
+    assert by_id["a"]["vec_sim"] == 0.9
+    assert by_id["b"]["vec_sim"] == 0.8
+    pure_bm25 = RRFFusion.fuse(vec, [{"chunk_id": "c", "text": "C", "score": 8.0}],
+                               k=60, bm25_weight=0.8)
+    assert {d["chunk_id"]: d["vec_sim"] for d in pure_bm25}["c"] is None
+
+
+def test_rrf_fusion_bm25_weight_flips_ordering():
+    """P2a: bm25_weight 被消费 — 等权平局时，降权 BM25 → 向量冠军胜，升权 → BM25 冠军胜"""
+    from core.fusion import RRFFusion
+
+    vec = [
+        {"chunk_id": "a", "text": "A", "score": 0.9},
+        {"chunk_id": "b", "text": "B", "score": 0.8},
+    ]
+    bm25 = [
+        {"chunk_id": "b", "text": "B", "score": 10.0},
+        {"chunk_id": "a", "text": "A", "score": 9.0},
+    ]
+    # 等权：两 doc rank 多重集相同 → 分数相等（平局）
+    equal = RRFFusion.fuse(vec, bm25, k=60)
+    assert abs(equal[0]["rrf_score"] - equal[1]["rrf_score"]) < 1e-12
+    # 软降权 bm25（config 默认 0.8）→ 向量 rank1 的 a 胜
+    soft = RRFFusion.fuse(vec, bm25, k=60, vector_weight=1.0, bm25_weight=0.8)
+    assert [d["chunk_id"] for d in soft] == ["a", "b"]
+    # 升权 bm25（5.0）→ BM25 rank1 的 b 反超
+    hard = RRFFusion.fuse(vec, bm25, k=60, vector_weight=1.0, bm25_weight=5.0)
+    assert [d["chunk_id"] for d in hard] == ["b", "a"]
+
+
+def test_apply_vec_sim_filter_keeps_only_above_threshold():
+    """P2c: 融合后 vec_sim 硬过滤 — 0.6 保留、0.3 滤除、None（纯 BM25 命中）视为 0 滤除"""
+    from core.retriever import ScoredDoc, apply_vec_sim_filter
+
+    docs = [
+        ScoredDoc(chunk_id="hi", text="t", score=0.03, vec_sim=0.6),
+        ScoredDoc(chunk_id="lo", text="t", score=0.02, vec_sim=0.3),
+        ScoredDoc(chunk_id="none", text="t", score=0.02, vec_sim=None),
+    ]
+    kept = apply_vec_sim_filter(docs, 0.45)
+    assert [d.chunk_id for d in kept] == ["hi"]
+    # 阈值边界：恰好 0.45 保留
+    edge = apply_vec_sim_filter(
+        [ScoredDoc(chunk_id="edge", text="t", score=0.03, vec_sim=0.45)], 0.45)
+    assert [d.chunk_id for d in edge] == ["edge"]
+    # threshold=None → 不过滤
+    assert len(apply_vec_sim_filter(docs, None)) == 3
+
+
+def _p2_hybrid_store(tmpdir):
+    """P2 集成测试共享场景（实测验证过）：
+    - c_a: 余弦 1.0（向量 rank1），BM25 0 分（文本不含 query token，rank2）
+    - c_b: 余弦 0.6（向量 rank2），BM25 唯一正分命中（rank1）
+    - c_filler: 余弦 0.3（向量 rank3，BM25 0 分）— 默认阈值 0.45 下被滤
+    """
+    import math
+    from core.retriever import HybridRetriever
+
+    ConfigRegistry.init("config.yaml")
+    ConfigRegistry.override("chromadb.persist_directory", tmpdir)
+    store = ChromaStore()
+    store.add(
+        ids=["c_a", "c_b", "c_filler"],
+        documents=["API 接口规范", "年假", "环境健康安全手册"],
+        embeddings=[[1.0] + [0.0] * 15,
+                    [0.6, 0.8] + [0.0] * 14,
+                    [0.3, math.sqrt(0.91)] + [0.0] * 14],
+        metadatas=[{"doc_type": "handbook", "is_active": True, "source_file_stem": "a"},
+                   {"doc_type": "technical", "is_active": True, "source_file_stem": "b"},
+                   {"doc_type": "handbook", "is_active": True, "source_file_stem": "f"}],
+    )
+    embedder = MagicMock()
+    embedder.encode.return_value = np.array([[1.0] + [0.0] * 15])
+    return HybridRetriever(store, embedder)
+
+
+def test_hybrid_retriever_consumes_fusion_weights():
+    """P2a 铁律4: retrieval.fusion.vector_weight / bm25_weight 被消费 —
+    override 后融合排序行为变化（向量冠军 vs BM25 冠军翻转）"""
+    from core.retriever import HybridRetriever
+
+    with tempfile.TemporaryDirectory() as tmp:
+        retriever = _p2_hybrid_store(tmp)
+        # 默认（w_v=1.0, w_b=0.8）：向量 rank1 的 c_a 领先（1/61+0.8/62 > 1/62+0.8/61）
+        default = retriever.retrieve("年假", top_k=10)
+        assert [d.chunk_id for d in default.docs] == ["c_a", "c_b"]
+        # bm25_weight 升到 10 → BM25 rank1 的 c_b 反超
+        ConfigRegistry.override("retrieval.fusion.bm25_weight", 10.0)
+        boosted = retriever.retrieve("年假", top_k=10)
+        assert [d.chunk_id for d in boosted.docs] == ["c_b", "c_a"]
+        # vector_weight 升到 100 → 向量冠军 c_a 回归第一
+        ConfigRegistry.override("retrieval.fusion.bm25_weight", 0.8)
+        ConfigRegistry.override("retrieval.fusion.vector_weight", 100.0)
+        vec_boost = retriever.retrieve("年假", top_k=10)
+        assert [d.chunk_id for d in vec_boost.docs] == ["c_a", "c_b"]
+        ConfigRegistry.override("retrieval.fusion.vector_weight", 1.0)
+
+
+def test_hybrid_retriever_consumes_vec_sim_threshold():
+    """P2c 铁律4: retrieval.fusion.vector_sim_threshold 被消费 —
+    调低全留、调高全滤；skip_adaptive（rerank 粗排池）同样生效"""
+    from core.retriever import HybridRetriever
+
+    with tempfile.TemporaryDirectory() as tmp:
+        retriever = _p2_hybrid_store(tmp)
+        # 默认 0.45：c_a（1.0）、c_b（0.6）保留，c_filler（0.3）被滤
+        default = retriever.retrieve("年假", top_k=10)
+        assert {d.chunk_id for d in default.docs} == {"c_a", "c_b"}
+        # 阈值 0.0 → 全保留（0.0 >= 0.0 边界）
+        ConfigRegistry.override("retrieval.fusion.vector_sim_threshold", 0.0)
+        all_kept = retriever.retrieve("年假", top_k=10)
+        assert {d.chunk_id for d in all_kept.docs} == {"c_a", "c_b", "c_filler"}
+        # 阈值 1.1 → 全滤（1.0 < 1.1）→ 空结果
+        ConfigRegistry.override("retrieval.fusion.vector_sim_threshold", 1.1)
+        assert retriever.retrieve("年假", top_k=10).docs == []
+        # skip_adaptive（rerank 粗排池）走同一过滤路径 — 候选池更干净
+        ConfigRegistry.override("retrieval.fusion.vector_sim_threshold", 0.45)
+        pool = retriever.retrieve("年假", top_k=10, skip_adaptive=True)
+        assert {d.chunk_id for d in pool.docs} == {"c_a", "c_b"}
+
+
+def test_hybrid_pure_bm25_hit_without_vec_sim_is_filtered():
+    """P2c: 纯 BM25 命中（vec_sim=None）视为 0 被滤 —
+    向量 top_k 截断后 BM25 独中的 doc 从结果中消失"""
+    from core.retriever import HybridRetriever
+
+    with tempfile.TemporaryDirectory() as tmp:
+        retriever = _p2_hybrid_store(tmp)
+        # 向量路全量返回时：c_b 余弦 0.6 ≥ 0.45 保留
+        assert {d.chunk_id for d in retriever.retrieve("年假", top_k=10).docs} \
+            == {"c_a", "c_b"}
+        # 向量路只返回 top1（c_a）→ c_b 仅 BM25 命中（vec_sim=None）→ 被滤
+        ConfigRegistry.override("retrieval.vector.top_k", 1)
+        narrowed = retriever.retrieve("年假", top_k=10)
+        assert {d.chunk_id for d in narrowed.docs} == {"c_a"}
+        ConfigRegistry.override("retrieval.vector.top_k", 20)
+
+
 # ── 6. Retriever 门面 ────────────────────────────────────────
 
 def test_retriever_facade_mode_mapping():
