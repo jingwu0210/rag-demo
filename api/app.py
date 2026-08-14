@@ -65,6 +65,16 @@ async def startup():
         app.state.retrieval_service = retrieval_service
         app.state.chat_service = chat_service
         app.state.ingest_service = ingest_service
+
+        # B 方案（v1.8）：启动预热 reranker（首次加载 ~5.5s）— 首个请求的延迟
+        # 不含模型加载税。独立 try/except：预热失败只 warning，不置 startup_error
+        # （运行时每个请求仍有 ensure_loaded + rerank 降级兜底，R8 锁防并发竞争）。
+        try:
+            retrieval_service.reranker.ensure_loaded()
+            logger.info("warmup_complete", component="reranker")
+        except Exception:
+            logger.warning("warmup_failed", component="reranker", exc_info=True)
+
         logger.info("api_startup_complete")
     except Exception as exc:
         # Embedder 等重组件加载失败：不崩，health 降级

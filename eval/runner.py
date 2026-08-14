@@ -64,6 +64,19 @@ def apply_config_mode(mode: str) -> None:
         raise ValueError(f"unknown config mode: {mode}")
 
 
+def _warmup_reranker(chat_service) -> None:
+    """B 方案（v1.8）：QA 计时前预热 reranker 模型（首次加载 ~5.5s）。
+
+    互斥锁（R8）保证并发首触只加载一次；预热失败记 warning 不中断评估 —
+    运行时每个请求的 rerank 前仍有 ensure_loaded + 降级兜底。
+    """
+    try:
+        chat_service.retrieval.reranker.ensure_loaded()
+        logger.info("reranker_warmup_complete")
+    except Exception:
+        logger.warning("reranker_warmup_failed", exc_info=True)
+
+
 # ── Ragas（LLM judge）──────────────────────────────────────
 
 _RAGAS_LLM_READY = False
@@ -349,6 +362,12 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
     results = []
     for mode in modes:
         apply_config_mode(mode)
+
+        # B 方案（v1.8）：预热重模型 — reranker 首次加载 ~5.5s，挪到 QA 计时之前，
+        # 65 条样本的延迟口径不含模型加载税（R4 的 50s P95 教训）。互斥锁（R8）
+        # 保证并发首触只加载一次；预热失败不中断评估（运行时仍有 rerank 降级兜底）。
+        if mode == "hybrid+rerank" and ConfigRegistry.get("reranker.enabled", True):
+            _warmup_reranker(chat_service)
 
         # ── 并发执行全部 QA（Semaphore 限流）──
         _ensure_ragas_llm()  # 预配置 judge（一次性）
