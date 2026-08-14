@@ -29,7 +29,8 @@ logger = get_logger(module="eval.report")
 CSV_COLUMNS = ["config", "faithfulness", "context_precision", "answer_compliance",
                "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
                "avg_tokens", "avg_prompt_tokens", "avg_completion_tokens",
-               "avg_chunks", "timeout_rate", "unanswered_rate", "total_requests"]
+               "avg_chunks", "timeout_rate", "unanswered_rate",
+               "oos_refusal_rate", "normal_refusal_rate", "total_requests"]
 
 # CSV 列 → results dict 键（run_comparison 聚合结果）
 _COLUMN_KEY = {
@@ -47,6 +48,8 @@ _COLUMN_KEY = {
     "avg_chunks": "avg_chunks_per_call",
     "timeout_rate": "timeout_rate",
     "unanswered_rate": "unanswered_rate",
+    "oos_refusal_rate": "oos_refusal_rate",
+    "normal_refusal_rate": "normal_refusal_rate",
     "total_requests": "total_requests",
 }
 
@@ -111,9 +114,10 @@ def generate_report(results: List[dict], output_dir: str) -> str:
 
 def _write_markdown(results: List[dict], md_path: str) -> None:
     lines = ["# RAG Evaluation Report", "",
-             "> 指标语义（v1.4+）：faithfulness / context_precision 为 Ragas LLM judge；",
+             "> 指标语义（v1.10+）：faithfulness / context_precision 为 Ragas LLM judge；",
              "> answer_compliance 为自研 LLM judge 6 档制（0=未回答问题，1-5 合规度），",
-             "> 0 分样本计入 unanswered_rate 且排除出 compliance 均值；",
+             "> 0 分参与 compliance 均值（有答案但未回答 = 生成质量缺陷）；",
+             "> unanswered_rate 为系统未作答样本（refused/timeout/空答案）占比；",
              "> style_consistency 为 vs 风格规范绝对打分（全量答案）；",
              "> refusal_appropriateness 为纯规则四场景判定。",
              "",
@@ -131,6 +135,31 @@ def _write_markdown(results: List[dict], md_path: str) -> None:
             val = r.get(col)
             cells.append("—" if val is None else f"{val:g}" if isinstance(val, float) else str(val))
         lines.append("| " + " | ".join(cells) + " |")
+
+    # P4 分层视图：OOS 子集 / 正常业务子集 / 未作答三类分解
+    # （OOS 样本不进 CP/Faith 计算但混在 refusal/unanswered 里，拆分后才能
+    # 区分"OOS 防御能力"与"正常业务误拒"；Style 与检索配置正交的特性
+    # 也在此注明：style 用于验证 Prompt 约束，不用于检索方案选型）
+    lines.append("")
+    lines.append("## 分层视图")
+    lines.append("")
+    lines.append("| Config | OOS 拒答率（OOS 子集） | 正常业务拒答正确率（误拒检测） | 未作答分解 refused/timeout/空 |")
+    lines.append("|--------|------|------|------|")
+    for r in results:
+        cfg = r.get("config_name", "")
+        oos = r.get("oos_refusal_rate")
+        normal = r.get("normal_refusal_rate")
+        oos_s = "—" if oos is None else f"{oos:g}"
+        normal_s = "—" if normal is None else f"{normal:g}"
+        parts = [str(r.get("unanswered_refused", 0)),
+                 str(r.get("unanswered_timeout", 0)),
+                 str(r.get("unanswered_empty", 0))]
+        lines.append(f"| {cfg} | {oos_s} | {normal_s} | {'/'.join(parts)} |")
+    lines.append("")
+    lines.append("> 注：OOS 拒答率 = OOS 样本中正确拒答占比（测 OOS 防御能力）；")
+    lines.append("> 正常业务拒答正确率 = 非 OOS 样本中未误拒占比（测误拒）；")
+    lines.append("> 未作答三类：refused（拒答）/ timeout（阶段超时降级）/ 空（其余空答案）。")
+    lines.append("> Style 指标与检索配置正交（三配置近同），用于验证 Prompt 话术约束而非检索方案选型。")
 
     lines.append("")
     lines.append("## 结论")
