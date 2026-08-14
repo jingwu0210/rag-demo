@@ -438,11 +438,22 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             pair = compliance_map.get(q["question"])
             q["answer_compliance"] = pair[0] if pair is not None else None
             q["judge_reason"] = pair[1] if pair is not None else None
-        # v1.6: 0 分（未回答问题，检索失败产物）从 compliance 均值排除，
-        # 单独计入 unanswered_rate（检索失败由 CP 指标惩罚，compliance 只测生成质量）
-        unanswered_count = sum(1 for p in compliance_map.values() if p is not None and p[0] == 0)
+        # v1.10 口径变更：0 分（有答案但未回答问题）参与 compliance 均值 —
+        # judge 已过滤 refused/timeout/空答案，"无法回答"式自由文本属于生成质量
+        # 缺陷，应拉低 compliance；unanswered_rate 语义改为"系统未作答样本"
+        # （refused / timeout / 空答案）占总样本比。
+        unanswered_count = sum(
+            1 for q in per_qa
+            if q["refused"] or q["timeout"]
+            or (not q["answer"] and not q["from_cache"]))
+        unanswered_count_refused = sum(1 for q in per_qa if q["refused"])
+        unanswered_count_timeout = timeout_count
+        unanswered_count_empty = sum(
+            1 for q in per_qa
+            if not q["answer"] and not q["from_cache"]
+            and not q["refused"] and not q["timeout"])
         compliance_scores = [p[0] for p in compliance_map.values()
-                             if p is not None and p[0] > 0]
+                             if p is not None]
 
         # v1.4: Style 改为 vs 风格规范绝对打分（全量答案，跨配置可比）
         style_scores = _judge_style_absolute(
@@ -461,11 +472,12 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             "context_precision": _round_mean(precision_scores),
             "context_recall": None,
             "answer_relevancy": None,
-            # Compliance: score/5 连续分取均值（用户确认：4 分贡献 0.8）
-            # v1.6: 0 分样本（未回答问题）排除出均值，单独计 unanswered_rate
+            # Compliance: score/5 连续分取均值（4 分贡献 0.8）
+            # v1.10: judge 0 分参与均值（有答案但未回答 = 生成质量缺陷）
             "answer_compliance": (_round_mean(compliance_scores) / 5
                                   if compliance_scores else None),
-            "unanswered_rate": round(unanswered_count / max(len(compliance_map), 1), 4),
+            # v1.10: 系统未作答（refused/timeout/空答案）占总样本比
+            "unanswered_rate": round(unanswered_count / max(len(per_qa), 1), 4),
             "style_consistency": style,
             "refusal_appropriateness": round(refusal_hits / n, 4),
             "p50_latency_ms": int(np.percentile(latencies, 50)) if latencies else 0,
@@ -478,6 +490,15 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             "timeout_rate": round(timeout_count / n, 4),
             "total_pii_redactions": total_pii,
             "total_injections_blocked": total_injections,
+            # P4 分层视图：OOS/正常业务拆分 + 未作答三类分解
+            # （OOS 样本不进 CP/Faith 计算，但混在 refusal/unanswered 里需拆分观测）
+            "oos_refusal_rate": _round_mean(
+                [q["refusal_appropriateness"] for q in per_qa if q["is_out_of_scope"]]),
+            "normal_refusal_rate": _round_mean(
+                [q["refusal_appropriateness"] for q in per_qa if not q["is_out_of_scope"]]),
+            "unanswered_refused": unanswered_count_refused,
+            "unanswered_timeout": unanswered_count_timeout,
+            "unanswered_empty": unanswered_count_empty,
             "per_qa_results_json": json.dumps(per_qa, ensure_ascii=False),
         }
         asyncio.run(_save_eval_history(agg))

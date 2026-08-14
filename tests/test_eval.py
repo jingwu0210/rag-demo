@@ -212,6 +212,15 @@ def test_run_comparison_executes_three_configs(tmp_path):
         assert r["context_precision"] == 0.8
         # 自研 judge（mock 5 分制 [5,4,5,4]）→ 均值/5 = (18/4)/5 = 0.9
         assert abs(r["answer_compliance"] - 0.9) < 1e-6
+        # v1.10: unanswered_rate = 系统未作答（refused/timeout/空答案）/ total
+        # 5 条中 1 条 OOS 拒答 → 0.2
+        assert abs(r["unanswered_rate"] - 0.2) < 1e-6
+        # P4 分层：OOS 子集（1 条拒答正确 → 1.0）；正常业务子集（4 条全正确 → 1.0）
+        assert r["oos_refusal_rate"] == 1.0
+        assert r["normal_refusal_rate"] == 1.0
+        # 未作答分解：refused=1 / timeout=0 / 空=0
+        assert r["unanswered_refused"] == 1 and r["unanswered_timeout"] == 0
+        assert r["unanswered_empty"] == 0
         # 拒答恰当性：4 条非 OOS 未拒 + 1 条 OOS 拒答 → 5/5
         assert r["refusal_appropriateness"] == 1.0
         assert r["style_consistency"] == 0.8
@@ -377,7 +386,8 @@ def test_generate_report_writes_csv_and_markdown(tmp_path):
     assert rows[0] == ["config", "faithfulness", "context_precision", "answer_compliance",
                        "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
                        "avg_tokens", "avg_prompt_tokens", "avg_completion_tokens",
-                       "avg_chunks", "timeout_rate", "unanswered_rate", "total_requests"]
+                       "avg_chunks", "timeout_rate", "unanswered_rate",
+                       "oos_refusal_rate", "normal_refusal_rate", "total_requests"]
     assert len(rows) == 4  # header + 3 config
     configs = {row[0] for row in rows[1:]}
     assert configs == {"vector-only", "hybrid", "hybrid+rerank"}
@@ -392,6 +402,8 @@ def test_generate_report_writes_csv_and_markdown(tmp_path):
         md = f.read()
     assert "Faithfulness" in md
     assert "hybrid+rerank" in md and "0.7" in md
+    # P4 分层视图区块
+    assert "分层视图" in md and "OOS 拒答率" in md
 
 
 # ═══ 5. before/after 对比 ══════════════════════════════════
