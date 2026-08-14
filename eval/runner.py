@@ -173,7 +173,10 @@ COMPLIANCE_JUDGE_PROMPT = """你是合规打分裁判。给定【参考文档片
 3分：次要信息轻微遗漏，核心规则无错误；
 2分：重要金额、流程、时效遗漏或篡改；
 1分：大量编造内容，核心回答与文档冲突。
-只输出数字分数，不要额外解释。
+判定规则（必须遵守）：
+1. 判定 0 分前，必须逐条核对参考文档；只有答案的关键断言在文档中完全找不到支撑时才能判 0。
+2. 参考文档中含有无关内容时，不得因此扣分——只核对答案断言是否与文档中对应内容一致。
+输出格式：分数|理由（理由一句话，≤30字）。
 
 参考文档：
 {chunks_text}
@@ -190,8 +193,12 @@ STYLE_RUBRIC_PROMPT = """你是写作风格裁判。对照以下企业知识库�
 {answer}"""
 
 
-def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[int]:
-    """单次 DeepSeek judge 调用 → int 分数；任何失败 → None（不中断评估）。"""
+def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[tuple]:
+    """单次 DeepSeek judge 调用 → (int 分数, str 理由)；任何失败 → None（不中断评估）。
+
+    v1.9（A 方案）：解析"分数|理由"格式（理由持久化到 per_qa 供诊断）；
+    纯数字输出（style prompt）→ 理由为 ""。
+    """
     import httpx
     api_key = os.getenv("DEEPSEEK_API_KEY", "")
     if not api_key:
@@ -205,15 +212,18 @@ def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[int]:
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={"model": model,
                       "messages": [{"role": "user", "content": prompt}],
-                      "temperature": temperature, "max_tokens": 50})
+                      "temperature": temperature, "max_tokens": 100})
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"].strip()
-            # 提取第一个整数（兼容 judge 偶发多输出）
+            # 提取第一个整数（兼容 judge 偶发多输出/前缀词如"分数：5分"）
             import re
             m = re.search(r"\d+", content)
             if m:
                 score = int(m.group())
-                return min(max(score, 0), 5)   # v1.6: 0 分档（未回答问题）
+                score = min(max(score, 0), 5)   # v1.6: 0 分档（未回答问题）
+                # 理由 = 最后一个 "|" 之后的内容（无 | 则整段或空）
+                reason = content.split("|")[-1].strip() if "|" in content else ""
+                return (score, reason)
             logger.warning("judge_unparsable", content=content[:100])
             return None
     except Exception as exc:
@@ -221,7 +231,7 @@ def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[int]:
         return None
 
 
-async def _judge_batch_async(prompts: List[str], max_concurrency: int = 5) -> List[Optional[int]]:
+async def _judge_batch_async(prompts: List[str], max_concurrency: int = 5) -> List[Optional[tuple]]:
     """批量 judge 调用（线程池并发 + 限流）；顺序与输入一致。"""
     sem = asyncio.Semaphore(max_concurrency)
 
@@ -233,8 +243,12 @@ async def _judge_batch_async(prompts: List[str], max_concurrency: int = 5) -> Li
     return await asyncio.gather(*[_one(p) for p in prompts])
 
 
-def _judge_compliance(answers_chunks: List[tuple]) -> List[Optional[int]]:
-    """Answer Compliance LLM judge（5 分制）。(answer, chunks_text) 批量打分。"""
+def _judge_compliance(answers_chunks: List[tuple]) -> List[Optional[tuple]]:
+    """Answer Compliance LLM judge（6 档制，v1.9）。(answer, chunks_text) 批量打分。
+
+    返回 [(score, reason)] — v1.9 起理由持久化进 per_qa（judge 误判可诊断，
+    不必再重放 API）。
+    """
     prompts = [COMPLIANCE_JUDGE_PROMPT.format(
         chunks_text=(chunks_text or "（无检索上下文）")[:4000],
         llm_answer=answer[:2000]) for answer, chunks_text in answers_chunks]
@@ -254,7 +268,8 @@ def _judge_style_absolute(answers: List[str]) -> List[Optional[int]]:
                for a in answers if a and a.strip()]
     if not prompts:
         return []
-    return asyncio.run(_judge_batch_async(prompts))
+    pairs = asyncio.run(_judge_batch_async(prompts))
+    return [p[0] if p is not None else None for p in pairs]
 
 
 # ── 测试集 hash ─────────────────────────────────────────────
@@ -416,16 +431,18 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
         # ── 自研 judge（每配置批量打分）──
         compliance_raw = _judge_compliance(
             [(answer, chunks_text) for _, answer, chunks_text in compliance_items])
-        compliance_map = {}  # 按 question 回填 5 分制原始分
-        for (qa, score) in zip(compliance_items, compliance_raw):
-            compliance_map[qa[0]] = score
+        compliance_map = {}  # 按 question 回填 (score, reason)
+        for (qa, pair) in zip(compliance_items, compliance_raw):
+            compliance_map[qa[0]] = pair
         for q in per_qa:
-            q["answer_compliance"] = compliance_map.get(q["question"])
+            pair = compliance_map.get(q["question"])
+            q["answer_compliance"] = pair[0] if pair is not None else None
+            q["judge_reason"] = pair[1] if pair is not None else None
         # v1.6: 0 分（未回答问题，检索失败产物）从 compliance 均值排除，
         # 单独计入 unanswered_rate（检索失败由 CP 指标惩罚，compliance 只测生成质量）
-        unanswered_count = sum(1 for s in compliance_map.values() if s == 0)
-        compliance_scores = [s for s in compliance_map.values()
-                             if s is not None and s > 0]
+        unanswered_count = sum(1 for p in compliance_map.values() if p is not None and p[0] == 0)
+        compliance_scores = [p[0] for p in compliance_map.values()
+                             if p is not None and p[0] > 0]
 
         # v1.4: Style 改为 vs 风格规范绝对打分（全量答案，跨配置可比）
         style_scores = _judge_style_absolute(
