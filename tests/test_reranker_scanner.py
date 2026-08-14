@@ -122,6 +122,27 @@ def test_reranker_truncates_to_top_n_from_config():
         ConfigRegistry.override("reranker.top_n", 5)
 
 
+def test_reranker_top_n_parameterized_full_vs_truncate():
+    """P1h: rerank 可选 top_n — top_n=None 全量排序（二次融合取位次），top_n=N 截断
+
+    默认行为（不传 top_n → config 截断）由上方 test_reranker_truncates_to_top_n_from_config 覆盖。
+    """
+    _init_config()
+    reranker = Reranker()
+    reranker.model = MagicMock()
+    reranker.model.predict.return_value = np.array([[0.9], [0.8], [0.7], [0.6], [0.5]])
+    candidates = _docs(["c0", "c1", "c2", "c3", "c4"], ["A", "B", "C", "D", "E"])
+
+    full = reranker.rerank("query", candidates, top_n=None)
+    assert len(full) == 5                              # None → 全量不截断
+    assert [d.chunk_id for d in full] == ["c0", "c1", "c2", "c3", "c4"]
+    assert full[0].score == 0.9 and full[4].score == 0.5   # rerank 分数仍写回
+
+    truncated = reranker.rerank("query", candidates, top_n=2)
+    assert len(truncated) == 2                         # 显式 top_n → 截断
+    assert [d.chunk_id for d in truncated] == ["c0", "c1"]
+
+
 def test_reranker_empty_candidates_skips_predict():
     _init_config()
     reranker = Reranker()

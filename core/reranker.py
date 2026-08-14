@@ -15,6 +15,11 @@ class CircuitBreakerOpen(Exception):
     pass
 
 
+# 哨兵值：区分 rerank 的"未传 top_n"（用 config reranker.top_n 截断，默认行为）
+# 与"显式传 top_n=None"（全量排序不截断 — P1h 二次融合需要完整 rerank 位次）
+_RANK_DEFAULT = object()
+
+
 class RerankerCircuitBreaker:
     """三态熔断器：CLOSED → OPEN → HALF_OPEN → CLOSED
 
@@ -104,13 +109,24 @@ class Reranker:
         """预热模型（首次加载耗时 >2s，须在阶段超时保护外调用）"""
         self._ensure_model()
 
-    def rerank(self, query: str, candidates: List[ScoredDoc]) -> List[ScoredDoc]:
+    def rerank(self, query: str, candidates: List[ScoredDoc],
+               top_n: Optional[int] = _RANK_DEFAULT) -> List[ScoredDoc]:
+        """重排候选并写回 doc.score（精排分数），按分数降序返回。
+
+        top_n 语义（P1h 双通道 RRF 二次融合需要全量位次，见 services/retrieval.py）：
+        - 不传（默认）→ 截断到 config reranker.top_n（向后兼容现有调用方/测试）
+        - 显式 top_n=None → 全量排序不截断（融合层从全排序中取每个 doc 的位次）
+        - 显式 top_n=N（正整数）→ 截断到 N
+        """
         if not candidates:
             return []
+        if top_n is _RANK_DEFAULT:
+            top_n = self.top_n
         # 核心逻辑经熔断器执行：predict 异常累计达阈值 → OPEN，下次调用抛 CircuitBreakerOpen
-        return self.breaker.call(lambda: self._rerank_impl(query, candidates))
+        return self.breaker.call(lambda: self._rerank_impl(query, candidates, top_n))
 
-    def _rerank_impl(self, query: str, candidates: List[ScoredDoc]) -> List[ScoredDoc]:
+    def _rerank_impl(self, query: str, candidates: List[ScoredDoc],
+                     top_n: Optional[int]) -> List[ScoredDoc]:
         model = self._ensure_model()
         # 输入截断 200 字符（性能实测驱动：真实候选 15 条 sum=6231 字符 → 全文推理
         # 2248ms 超 2s 超时预算 → 评估日志大量 rerank_degraded）。
@@ -123,6 +139,6 @@ class Reranker:
         for doc, score in zip(candidates, flat):
             doc.score = float(score)  # 写回 rerank 分数
         ranked = sorted(candidates, key=lambda d: d.score, reverse=True)
-        if self.top_n:
-            ranked = ranked[: self.top_n]
+        if top_n:
+            ranked = ranked[:top_n]   # None → 全量不截断（P1h 融合取位次）
         return ranked

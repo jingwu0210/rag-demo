@@ -120,6 +120,40 @@ def test_retrieval_service_rerank_reorders_docs():
     scanner.scan.assert_called_once()
 
 
+def test_retrieval_service_dual_channel_rrf_fusion():
+    """P1h: rerank 后双通道 RRF 二次融合 — 精排不独裁（R4 排序失真修复）
+
+    粗排 [A,B,C]；CrossEncoder 全量排序 [C,A,B]（C 被顶到第一）。
+    纯 rerank 结果应为 [C,A,B]；融合后 final = 1/(60+粗排位次) + 1/(60+rerank位次)
+    （1-based rank，与 core/fusion.py 一致）：
+    - A: 1/61 + 1/62 ≈ 0.0325224（粗排#1 + rerank#2）
+    - C: 1/63 + 1/61 ≈ 0.0322665（粗排#3 + rerank#1）
+    - B: 1/62 + 1/63 ≈ 0.0320020（粗排#2 + rerank#3）
+    最终顺序 [A, C, B] — A 因粗排第一回归首位，C 居第二（未被精排独裁）。
+    """
+    ConfigRegistry.init("config.yaml")
+    ConfigRegistry.override("reranker.enabled", True)
+    ConfigRegistry.override("reranker.top_n", 5)
+    docs = [_scored_doc("A", "内容 A", 0.9), _scored_doc("B", "内容 B", 0.8),
+            _scored_doc("C", "内容 C", 0.7)]
+    retriever, reranker, scanner = _retrieval_mocks(
+        docs, rerank_result=[docs[2], docs[0], docs[1]])   # mock 返回全排序 [C,A,B]
+    scanner.scan = MagicMock(side_effect=lambda d: (d, 0))  # 透传融合后结果
+    svc = RetrievalService(retriever=retriever, reranker=reranker,
+                           scanner=scanner, guard=ResilienceGuard())
+
+    out = asyncio.run(svc.retrieve("员工行为规范相关"))
+
+    assert out.degraded is False
+    assert [d.chunk_id for d in out.docs] == ["A", "C", "B"]
+    k = int(ConfigRegistry.get("retrieval.fusion.rrf_k", 60))   # config 单源（与粗排融合共用）
+    scores = {d.chunk_id: d.score for d in out.docs}
+    assert scores["A"] == pytest.approx(1 / (k + 1) + 1 / (k + 2))
+    assert scores["C"] == pytest.approx(1 / (k + 3) + 1 / (k + 1))
+    assert scores["B"] == pytest.approx(1 / (k + 2) + 1 / (k + 3))
+    reranker.rerank.assert_awaited_once()
+
+
 def test_retrieval_service_rerank_circuit_breaker_degrades():
     """reranker 抛 CircuitBreakerOpen → degraded=True 且不抛异常，截断 top_n 兜底"""
     ConfigRegistry.init("config.yaml")
