@@ -144,6 +144,45 @@ def test_apply_config_mode():
     assert ConfigRegistry.get("reranker.enabled") is True
 
 
+# ═══ 2.5 judge 解析（v1.9: "分数|理由" 格式）════════════════
+
+def _mock_judge_resp(content: str):
+    resp = MagicMock()
+    resp.json.return_value = {"choices": [{"message": {"content": content}}]}
+    client = MagicMock()
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+    client.post.return_value = resp
+    client.post.return_value.raise_for_status = MagicMock()
+    return client
+
+
+def test_judge_llm_call_parses_score_and_reason(monkeypatch):
+    """v1.9：judge 输出 "分数|理由" → (score, reason) 元组"""
+    from eval.runner import _judge_llm_call
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    with patch("httpx.Client", return_value=_mock_judge_resp("5|完全依据文档，无遗漏")):
+        assert _judge_llm_call("prompt") == (5, "完全依据文档，无遗漏")
+    with patch("httpx.Client", return_value=_mock_judge_resp("分数：5分|理由：完全依据")):
+        assert _judge_llm_call("prompt") == (5, "理由：完全依据")
+
+
+def test_judge_llm_call_plain_number_yields_empty_reason(monkeypatch):
+    """style prompt 只输出数字 → (score, "")"""
+    from eval.runner import _judge_llm_call
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    with patch("httpx.Client", return_value=_mock_judge_resp("4")):
+        assert _judge_llm_call("prompt") == (4, "")
+
+
+def test_judge_llm_call_unparsable_yields_none(monkeypatch):
+    """judge 偶发回显格式模板无数字 → None（跳过该样本，不中断评估）"""
+    from eval.runner import _judge_llm_call
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    with patch("httpx.Client", return_value=_mock_judge_resp("分数|理由")):
+        assert _judge_llm_call("prompt") is None
+
+
 # ═══ 3. 三配置对比 Runner ══════════════════════════════════
 
 def test_run_comparison_executes_three_configs(tmp_path):
@@ -152,7 +191,7 @@ def test_run_comparison_executes_three_configs(tmp_path):
     test_set = _sample_test_set()
     with patch("eval.runner._ensure_ragas_llm", return_value=True), \
          patch("eval.runner._try_ragas_score_async", return_value=0.8), \
-         patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
+         patch("eval.runner._judge_compliance", return_value=[(5, "完全依据"), (4, "少量补充"), (5, "完全依据"), (4, "少量补充")]), \
          patch("eval.runner._judge_style_absolute", return_value=[4, 4, 4, 4]):
         results = run_comparison(service, test_set, run_id="run_e2e")
 
@@ -194,6 +233,9 @@ def test_run_comparison_executes_three_configs(tmp_path):
     assert len(oos) == 1 and oos[0]["refused"] is True
     # OOS 拒答无"回答"可判 → compliance 为 None（judge 只对实际作答打分）
     assert oos[0]["answer_compliance"] is None
+    # v1.9: judge 理由持久化（诊断用，不再重放 API）
+    judged = [p for p in per_qa if p["answer_compliance"] is not None]
+    assert judged and judged[0]["judge_reason"] == "完全依据"
 
 
 def test_apply_config_mode_switches_retriever_dispatch():
@@ -246,7 +288,7 @@ def test_run_comparison_ragas_import_failure_does_not_abort(tmp_path, monkeypatc
     monkeypatch.setattr(eval_runner, "_RAGAS_LLM_READY", False)
 
     service = FakeChatService()
-    with patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
+    with patch("eval.runner._judge_compliance", return_value=[(5, "完全依据"), (4, "少量补充"), (5, "完全依据"), (4, "少量补充")]), \
          patch("eval.runner._judge_style_absolute", return_value=[4, 4, 4, 4]):
         results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas_import")
 
@@ -267,7 +309,7 @@ def test_run_comparison_ragas_unavailable_yields_none(tmp_path):
     service = FakeChatService()
     with patch("eval.runner._ensure_ragas_llm", return_value=True), \
          patch("eval.runner._try_ragas_score_async", return_value=None), \
-         patch("eval.runner._judge_compliance", return_value=[5, 4, 5, 4]), \
+         patch("eval.runner._judge_compliance", return_value=[(5, "完全依据"), (4, "少量补充"), (5, "完全依据"), (4, "少量补充")]), \
          patch("eval.runner._judge_style_absolute", return_value=[4, 4, 4, 4]):
         results = run_comparison(service, _sample_test_set(), run_id="run_no_ragas")
     assert len(results) == 3
