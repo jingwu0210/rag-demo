@@ -1,9 +1,80 @@
 # RAG + 生成式 AI 内部知识库问答服务 — 架构设计文档
 
 > **Case Study**: Mid-Level Developer Take-Home Assignment  
-> **作者**: AIA Candidate
+> **作者**: Jing Wu
 
 ---
+
+## 目录
+
+- [0. 版本记录](#0-版本记录)
+- [1. 项目概述层](#1-项目概述层)
+  - [1.1 项目背景与定位](#11-项目背景与定位)
+  - [1.2 核心目标与量化验收指标](#12-核心目标与量化验收指标)
+  - [1.3 全局硬性约束（选型取舍核心依据）](#13-全局硬性约束选型取舍核心依据)
+  - [1.4 术语词典](#14-术语词典)
+- [2. 需求分析层](#2-需求分析层)
+  - [2.1 功能需求](#21-功能需求)
+  - [2.2 非功能需求](#22-非功能需求)
+  - [2.3 输入输出边界](#23-输入输出边界)
+  - [2.4 需求覆盖度检查表](#24-需求覆盖度检查表)
+- [3. 总体架构设计层](#3-总体架构设计层)
+  - [3.1 分层架构总览](#31-分层架构总览)
+  - [3.2 冷热路径拆分设计](#32-冷热路径拆分设计)
+  - [3.3 并发与执行模型](#33-并发与执行模型)
+  - [3.4 配置中心设计](#34-配置中心设计)
+  - [3.5 单实例部署约束说明](#35-单实例部署约束说明)
+- [4. Query 链路模块详细设计（在线热路径）](#4-query-链路模块详细设计在线热路径)
+  - [4.1 ChatService（顶层编排）](#41-chatservice顶层编排)
+  - [4.2 RetrievalService（检索编排）](#42-retrievalservice检索编排)
+  - [4.3 Retriever（检索策略）](#43-retriever检索策略)
+  - [4.4 Reranker 模块](#44-reranker-模块)
+  - [4.5 Generator 模块](#45-generator-模块)
+  - [核心约束](#核心约束)
+    - [1. 严格基于上下文](#1-严格基于上下文)
+    - [2. 文档指令不可执行](#2-文档指令不可执行)
+    - [3. 回答风格](#3-回答风格)
+    - [5. 隐私保护](#5-隐私保护)
+  - [4.6 PostProcessor 模块](#46-postprocessor-模块)
+  - [4.7 CacheManager 模块](#47-cachemanager-模块)
+  - [4.8 ResilienceGuard 模块](#48-resilienceguard-模块)
+  - [4.9 对话管理层](#49-对话管理层)
+- [5. Ingest 链路 & 数据层设计（离线冷路径）](#5-ingest-链路-数据层设计离线冷路径)
+  - [5.1 OCR 流水线](#51-ocr-流水线)
+  - [5.2 HierarchicalChunker（分层语义切片）](#52-hierarchicalchunker分层语义切片)
+  - [5.3 Dedup & Conflict Detection](#53-dedup-conflict-detection)
+  - [5.4 VersionedIngest（版本化入库）](#54-versionedingest版本化入库)
+  - [5.5 存储组件设计](#55-存储组件设计)
+  - [5.6 数据治理](#56-数据治理)
+  - [5.7 缓存数据设计](#57-缓存数据设计)
+- [6. 安全 & 可观测 & 评测专项设计](#6-安全-可观测-评测专项设计)
+  - [6.1 安全防护](#61-安全防护)
+  - [6.2 可观测性](#62-可观测性)
+  - [6.3 评测体系](#63-评测体系)
+  - [6.4 语料设计](#64-语料设计)
+- [7. 技术选型与量化论证](#7-技术选型与量化论证)
+  - [7.1 文档处理](#71-文档处理)
+  - [7.2 切片算法](#72-切片算法)
+  - [7.3 Embedding & Reranker](#73-embedding-reranker)
+  - [7.4 向量数据库](#74-向量数据库)
+  - [7.5 LLM 生成模型](#75-llm-生成模型)
+  - [7.6 缓存 & 存储](#76-缓存-存储)
+  - [7.7 Web 框架 & 评测框架](#77-web-框架-评测框架)
+- [8. 工程交付](#8-工程交付)
+  - [8.1 项目目录结构](#81-项目目录结构)
+  - [8.2 环境依赖](#82-环境依赖)
+  - [8.3 启动 & 评测脚本](#83-启动-评测脚本)
+  - [8.4 完整交付物清单](#84-完整交付物清单)
+- [9. 风险与优化展望](#9-风险与优化展望)
+  - [9.1 当前架构局限](#91-当前架构局限)
+  - [9.2 短期优化方向（可在当前架构实现）](#92-短期优化方向可在当前架构实现)
+  - [9.3 生产扩展方向（仅论述，不落地）](#93-生产扩展方向仅论述不落地)
+- [10. 附录](#10-附录)
+  - [10.1 config.yaml 完整示例](#101-configyaml-完整示例)
+  - [10.2 结构化日志样例](#102-结构化日志样例)
+  - [10.3 字段字典](#103-字段字典)
+  - [10.4 评估输出 CSV 样例](#104-评估输出-csv-样例)
+  - [10.5 指标计算公式说明](#105-指标计算公式说明)
 
 ## 0. 版本记录
 
@@ -19,10 +90,16 @@
 | v1.7 | 2026-08-13 | 评估并发化：问答并发 eval.concurrency=5 + Ragas 双指标并行（串行 40 分钟 → 8-10 分钟） |
 | v1.8 | 2026-08-13 | R8 rerank 并发缺陷修复（互斥锁 + max_workers 5）+ 启动预热（B 方案：API startup + 评估 runner 预热，延迟计时不含模型加载税）+ 文档一致性大扫除（/simplify）：虚构示例数据模板化（ISSUE-001 改用真实案例 R2→R3）；600ms 估算全量替换为实测 816ms/2248ms；doc_type/out_of_scope 关键词层残留清理（§2.4/§3.2/§4.1/§4.3/§4.6/§5.5）；Compliance 6 档制与 Style 绝对打分同步正文与附录；CSV 样例改用 R4 实测数据；拒答文案收敛到 config.yaml 单源；删除 cache.l2 配置孤儿键（铁律 4，L2 改文档级扩展点） |
 | v1.9 | 2026-08-15 | Compliance judge 判定规则补强（A 方案，重放验证实证）：0 分判定前逐条核对参考文档 + 无关 chunk 不扣分，修正"答案正确但判 0"误判（病假样本 7/7 复现→7/7 修正）；judge 输出"分数\|理由"格式，理由持久化进 per_qa（judge_reason 字段）；两段式 judge（B 方案）重放验证无增量价值不采用 |
+| v1.10 | 2026-08-15 | Compliance 聚合口径变更（替代 v1.6 立场 a）：judge 0 分参与 compliance 均值（有答案但未回答 = 生成质量缺陷）；unanswered_rate 语义改为"系统未作答（refused/timeout/空答案）占比"，分母改为 total_requests。文档加目录（68 条链接，GitHub slug 锚点） |
+| v1.11 | 2026-08-15 | P1h 双通道 RRF 二次融合（修复 rerank 排序失真）：rerank 后 final = 1/(k+粗排位次) + 1/(k+rerank位次)，精排不独裁；Reranker.rerank 增加 top_n 参数（哨兵区分默认/None=全量/N）；依据 R4 失真证据（API Spec -78%、休假制度 -49%、通用章节 +36%） |
+| v1.12 | 2026-08-15 | P2 hybrid 融合噪声过滤：RRF 加权（vector_weight 1.0 / bm25_weight 0.8 软降权）+ 融合后 vec_sim ≥ 0.45 硬过滤（实测依据：术语类 17 条答案依据 chunk 余弦全部 ≥0.4781 零误杀，铁律 6 验证）；ScoredDoc 增加 vec_sim 字段 |
+| v1.13 | 2026-08-15 | P4 分层指标报表（oos_refusal_rate / normal_refusal_rate / 未作答三类分解，CSV 15→17 列）；测试集 v2（80 条 = 原 65 条 + 三类区分度样本 15 条，多义词类语料不支持不硬造）；发现 R4 时 chroma HNSW 索引未完整落盘（与元数据不同步，挂账观察） |
+| v1.11 | 2026-08-15 | R4 排序失真修复（P1h）：rerank 后双通道 RRF 二次融合 — final = 1/(60+粗排位次) + 1/(60+rerank位次)，精排不独裁（两信号各投一票，rrf_k 与粗排融合共用 retrieval.fusion.rrf_k）；rerank() 增加可选 top_n（显式 None = 全量排序供融合取位次，不传保持 config 截断）。根因证据与决策见 §4.4 设计决策表 |
+| v1.12 | 2026-08-15 | R4 hybrid 噪声过滤（P2）：RRF 融合加权（vector_weight=1.0 / bm25_weight=0.8，BM25 路软降权）+ 融合后 vec_sim ≥ 0.45 硬过滤（纯 BM25 命中视为 0 被滤，过滤在 AdaptiveK 之前，rerank 粗排池同样受益；vector_top1_sim 旁路语义不变）。实测依据：术语类 17 条答案依据 chunk 余弦全部 ≥0.4781，0.45 零误杀；普通中文样本全部 >0.45。见 §4.3 ①.1 |
 
 ---
 
-## 一、项目概述层
+## 1. 项目概述层
 
 ### 1.1 项目背景与定位
 
@@ -123,7 +200,7 @@
 
 ---
 
-## 二、需求分析层
+## 2. 需求分析层
 
 ### 2.1 功能需求
 
@@ -322,7 +399,7 @@ eval.sh（自动化，~1 分钟）
 
 ---
 
-## 三、总体架构设计层
+## 3. 总体架构设计层
 
 ### 3.1 分层架构总览
 
@@ -660,7 +737,7 @@ class ConfigRegistry:
 | LLM 生成 | provider, model, temperature, max_tokens, api_key_env, base_url, timeout | 7 |
 | Embedding | model, device, batch_size, max_length, normalize | 5 |
 | Reranker | enabled, model, device, top_n, candidates_multiplier, timeout, max_workers, circuit_breaker | 8 |
-| 检索 | mode, vector(top_k, metric), bm25(top_k, k1, b), fusion(algorithm, rrf_k), adaptive(enabled, min_score, min_chunks, max_chunks), metadata_filter(enabled, expire: enabled/grace_period_days), timeout, max_workers | 20 |
+| 检索 | mode, vector(top_k, metric), bm25(top_k, k1, b), fusion(algorithm, rrf_k, vector_weight, bm25_weight, vector_sim_threshold), adaptive(enabled, min_score, min_chunks, max_chunks), metadata_filter(enabled, expire: enabled/grace_period_days), timeout, max_workers | 23 |
 | 缓存 | L1(enabled, ttl, max_entries) | 3（v1.8 删除 l2 配置孤儿：预留键无代码消费者违反铁律 4，L2 为文档级扩展点，实现时再加键） |
 | 分片 | max_chunk_tokens, min_chunk_tokens, overlap_tokens, heading_context, heading_patterns | 5+ |
 | OCR | engine, language[], layout_analysis, table_restore, clean(5 项), dpi, max_image_pixels | 11 |
@@ -704,7 +781,7 @@ class ConfigRegistry:
 
 ---
 
-## 四、Query 链路模块详细设计（在线热路径）
+## 4. Query 链路模块详细设计（在线热路径）
 
 Query 链路按职责拆分为两个子链路和一组横切模块：
 
@@ -951,11 +1028,21 @@ query ──┬──→ BGE-M3 encode → vec → ChromaDB.query(vec, top_k=20)
         │       → BM25.search(tokens, top_k=20)
         │       → List[ScoredDoc]
         │
-        └──→ RRF 融合
+        └──→ 加权 RRF 融合（P2a，v1.12）
                 │
                 ▼
-            RRF_score(chunk) = 1/(60+vec_rank) + 1/(60+bm25_rank)
+            RRF_score(chunk) = w_v/(60+vec_rank) + w_b/(60+bm25_rank)
+            w_v = retrieval.fusion.vector_weight（1.0）
+            w_b = retrieval.fusion.bm25_weight（0.8，BM25 路软降权：
+                  保留术语强命中的机会，不硬剔除）
             注意：如果某 chunk 只出现在一路结果中，另一路 rank=∞（贡献 0）
+                │
+                ▼
+            vec_sim 硬过滤（P2c，v1.12，兜底，发生在 AdaptiveK 之前）：
+            docs = [d for d in fused if (d.vec_sim or 0) ≥ 0.45]
+            vec_sim = 向量路命中时的余弦分；纯 BM25 命中（无向量分）视为 0 被滤
+            （BM25 独中但向量不相关的噪声正是过滤目标）；
+            rerank 粗排池（skip_adaptive）走同一路径，候选池同样更干净
                 │
                 ▼
             按 RRF_score 降序排列 → 去重 → top_k → AdaptiveK
@@ -974,8 +1061,14 @@ HybridRetriever(query, top_k=vector.top_k × candidates_multiplier)  # 候选池
         for each (query, chunk[:200]) pair → relevance_score
         耗时: 实测 ~816ms/30 候选（截断 200 字符；全文推理 2248ms 曾频繁触发 2s 超时降级）
     │
+    ▼ (30 条全量排序 — P1h: top_n=None 不截断，取每个 doc 的 rerank 位次)
+    双通道 RRF 二次融合（v1.11，精排不独裁）:
+        final = 1/(rrf_k + 粗排位次) + 1/(rrf_k + rerank位次)
+        # 粗排位次 = rerank 前列表 index+1；rerank 位次 = 全排序 index+1（1-based，与粗排 RRF 一致）
+        # rrf_k 复用 retrieval.fusion.rrf_k（60）
+    │
     ▼
-    按 relevance_score 降序 → Top-5 → AdaptiveK
+    按 final 降序 → Top-5 → AdaptiveK
 ```
 
 #### 关键算法策略
@@ -992,6 +1085,26 @@ k=60: 排名权重平缓（1/61=0.0164 vs 1/70=0.0143 → 1.15× 差距）
 - 业界标准默认值（Elasticsearch、Weaviate）
 - 适合"向量和 BM25 相互补充"的场景（非一方压制另一方）
 - 有文献支撑（Cormack et al., TREC 2009）
+```
+
+**①.1 P2（v1.12）加权 + 向量阈值过滤**（R4 hybrid CP=0.7214 偏低、avg 7.72 chunk/题，BM25 无关命中混入）：
+
+```
+加权 RRF（软降权，不硬剔除）:
+    score = w_v/(k+rank_vec) + w_b/(k+rank_bm25)
+    w_v = retrieval.fusion.vector_weight（1.0）
+    w_b = retrieval.fusion.bm25_weight（0.8）— BM25 命中权重压低：
+          BM25 独中的噪声被软降权，但术语强命中（ISO 27001/429/SEV/VPN）
+          仍有机会排进前列
+
+融合后 vec_sim 硬过滤（兜底）:
+    候选的向量余弦 < vector_sim_threshold（0.45）直接剔除；
+    纯 BM25 命中（无 vec_sim）视为 0 同样剔除 — 正是"BM25 独中但向量
+    不相关"的噪声。过滤发生在 AdaptiveK 之前，rerank 粗排池同样受益。
+    实测依据（铁律 6）：术语类 17 条样本的答案依据 chunk 与 query 余弦
+    全部 ≥0.4781，0.45 阈值零误杀；普通中文样本全部 >0.45。
+    vector_top1_sim 旁路语义不变（仍为向量路 top1 余弦，供 RefusalCheck；
+    过滤阈值与置信度阈值同为 0.45 → 过滤后非空 ⟺ 向量路 top1 ≥ 0.45）。
 ```
 
 **② AdaptiveK（自适应截断）**：
@@ -1119,6 +1232,7 @@ Cross-Encoder 精排模块，对粗排候选做逐对打分。在 `config.rerank
 | max_workers = 5（R8） | 容量模型：最坏延迟 = ceil(并发/worker) × T(816ms) ≤ 2s 预算 → 5 并发 1 轮 0.82s、10 并发 2 轮 1.63s。注：5 路 MPS 并发推理无放大未经实测，若退化 >1.6s/次应回退 4 |
 | 预热排除在阶段超时外 | 首次加载 ~3.4s > 2s 预算，warmup 由独立 wait_for(180) 保护；锁修后并发首触只加载一次 |
 | 启动预热（B 方案，v1.8） | 模型加载挪到计时外：API startup 预热 reranker（独立 try/except，失败 warning 不崩，运行时仍有降级兜底）；评估 runner 切到 hybrid+rerank 配置后、QA 计时前预热一次。效果：首请求/全部评估样本的延迟不含 ~5.5s 加载税 |
+| 二次 RRF 融合（P1h，v1.11） | R4 评估排序失真：CrossEncoder 把细粒度相关文档挤出 top_n=5（API Spec -78%、休假制度 -49%、通用章节"员工行为规范"+36%），Faith/CP 最低。修复：精排不独裁 — final = 1/(60+粗排位次) + 1/(60+rerank位次)，两信号各投一票；rerank 改全量排序取位次（top_n=None），按 final 降序截 top_n；rrf_k 与粗排融合共用 retrieval.fusion.rrf_k（config 单源） |
 
 #### 输入输出接口
 
@@ -1652,7 +1766,7 @@ conversation:
 
 ---
 
-## 五、Ingest 链路 & 数据层设计（离线冷路径）
+## 5. Ingest 链路 & 数据层设计（离线冷路径）
 
 ### 5.1 OCR 流水线
 
@@ -1960,7 +2074,7 @@ data/
 
 ---
 
-## 六、安全 & 可观测 & 评测专项设计
+## 6. 安全 & 可观测 & 评测专项设计
 
 ### 6.1 安全防护
 
@@ -2129,7 +2243,7 @@ pii_redact_total, injection_blocked_total
   - 3 分：少量次要信息遗漏 / 轻微改写
   - 2 分：重要数字 / 条款遗漏或修改
   - 1 分：大量编造，核心内容错误
-- **聚合方式**（v1.6）：0 分样本计入 `unanswered_rate` 单独统计，**排除出 compliance 均值**（立场 a：compliance 测"有答案时答案是否合规"，检索失败导致的"诚实无法回答"不惩罚 compliance）；`Answer Compliance = Σ(非 0 打分) / (非 0 样本数 × 5)`
+- **聚合方式**（v1.10 口径变更，替代 v1.6 立场 a）：judge 0 分**参与 compliance 均值**（0 分 = 有答案但未回答问题，属生成质量缺陷应拉低均值）；`Answer Compliance = Σ(0-5 打分) / (进 judge 样本数 × 5)`。`unanswered_rate` 语义改为"系统未作答样本占比"：`unanswered_rate = (refused + timeout + 空答案) / total_requests` — 与"检索失败→CP 惩罚"的职责划分一致：compliance 管生成质量、CP 管检索质量、unanswered_rate 管系统拒绝率。变更理由：judge 已过滤 refused/timeout/空答案，剩余判 0 的样本是"系统判定未到拒答标准、LLM 却输出回避式文本"的真实生成缺陷（R4 中 LLM 过度保守样本属此类）
 - **Judge Prompt**（实现原文，以 eval/runner.py 为准）：
 
 ```
@@ -2172,6 +2286,7 @@ pii_redact_total, injection_blocked_total
 
 - **计算公式**：`Refusal Appropriateness = 正确处理样本数 / 总测试样本数`
 - **评测集要求**：混入 20% out-of-scope 问题 + 三类区分度样本（v1.4 测试集 65 条含 12 条 OOS）：
+- **测试集 v2（v1.13，80 条）**：`data/eval/test_set_v2.json` = 原 65 条逐字节保留 + 15 条新增三类区分度样本（多数字条款 5 / 中英混合 5 / 长复杂政策 5）。多义词类经语料盘点**不支持**（语料无真正双义实例，不硬造——避免无法回答样本）。切换方式：override `eval.test_set_path` 指向 v2；before/after 对比因 test_set_hash 变化，按 65 条公共问题子集（per_qa question 交集）重算，对比口径在 eval-history 注明：
   - **精确术语类**（ISO 27001/429/SEV-1 等）— 发挥 BM25 优势，否则测试集对 hybrid 不公平
   - **复杂多跳类**（需多 chunk 拼合）— 让 Faithfulness 对检索完整性敏感
   - **边界模糊类**（关键词误伤/safety 边界/半相关）— 让 Refusal 指标有区分度
@@ -2208,7 +2323,8 @@ pii_redact_total, injection_blocked_total
 #### 附加性能指标
 
 - **Timeout Rate**：超时样本占比（v1.2 新增，单独统计不丢弃 — 符合可观测、故障诊断交付要求）。超时判定：`resp.partial` 或（非拒答且空回答且无 sources 且非缓存）
-- **Unanswered Rate**：Compliance 0 分样本占比（v1.6 新增 — 区分"检索失败/诚实无法回答"与"答了但不合规"，见 §6.3 ③ 聚合方式）
+- **Unanswered Rate**：系统未作答样本占比（v1.10 语义：refused + timeout + 空答案 / total_requests — 测系统拒绝率，与 compliance 的职责划分见 §6.3 ③）
+- **分层视图（P4，v1.13）**：报表拆分 OOS/正常业务子集——`oos_refusal_rate`（OOS 样本拒答正确率，测 OOS 防御）、`normal_refusal_rate`（非 OOS 样本未误拒占比，测误拒）、未作答三类分解（refused/timeout/空答案计数）。理由：OOS 样本不进 CP/Faith 计算但混在 refusal/unanswered 里，不拆分无法区分"OOS 防御能力"与"正常业务误拒"；Style 指标与检索配置正交（三配置近同），其价值是验证 Prompt 话术约束而非检索方案选型，报表注明
 
 #### 三配置对比实验流程
 
@@ -2464,7 +2580,7 @@ python -m eval.report --compare <run_id_before> <run_id_after>
 
 ---
 
-## 七、技术选型与量化论证
+## 7. 技术选型与量化论证
 
 ### 7.1 文档处理
 
@@ -2582,7 +2698,7 @@ python -m eval.report --compare <run_id_before> <run_id_after>
 
 ---
 
-## 八、工程交付
+## 8. 工程交付
 
 ### 8.1 项目目录结构
 
@@ -2724,7 +2840,7 @@ echo "评估完成: data/eval/results/report.csv"
 
 ---
 
-## 九、风险与优化展望
+## 9. 风险与优化展望
 
 ### 9.1 当前架构局限
 
@@ -2761,7 +2877,7 @@ echo "评估完成: data/eval/results/report.csv"
 
 ---
 
-## 十、附录
+## 10. 附录
 
 ### 10.1 config.yaml 完整示例
 
@@ -2794,13 +2910,13 @@ echo "评估完成: data/eval/results/report.csv"
 
 ### 10.4 评估输出 CSV 样例
 
-列定义与实现以 `eval/report.py` 为准（14 列）。样例为 R4 实测数据（run `eval_20260813_201247_bc895179`，完整对比见 docs/eval-history.md）：
+列定义与实现以 `eval/report.py` 为准（v1.13 起 17 列：+oos_refusal_rate/normal_refusal_rate，P4 分层）。样例为 R4 实测数据（run `eval_20260813_201247_bc895179`，R4 时分层列为空，完整对比见 docs/eval-history.md）：
 
 ```csv
-config,faithfulness,context_precision,answer_compliance,refusal_appropriateness,style_consistency,p50_ms,p95_ms,avg_tokens,avg_prompt_tokens,avg_completion_tokens,avg_chunks,timeout_rate,unanswered_rate,total_requests
-vector-only,0.9433,0.8513,1.0,0.9846,0.8852,1346,2700,1505,1447,58,5.54,0.0,0.2222,65
-hybrid,0.9314,0.7214,1.0,0.9846,0.8852,1454,2478,1917,1858,59,7.72,0.0,0.2037,65
-hybrid+rerank,0.9006,0.7356,1.0,0.8615,0.8783,3100,50211,1167,1115,51,4.32,0.0,0.3696,65
+config,faithfulness,context_precision,answer_compliance,refusal_appropriateness,style_consistency,p50_ms,p95_ms,avg_tokens,avg_prompt_tokens,avg_completion_tokens,avg_chunks,timeout_rate,unanswered_rate,oos_refusal_rate,normal_refusal_rate,total_requests
+vector-only,0.9433,0.8513,1.0,0.9846,0.8852,1346,2700,1505,1447,58,5.54,0.0,0.2222,,,65
+hybrid,0.9314,0.7214,1.0,0.9846,0.8852,1454,2478,1917,1858,59,7.72,0.0,0.2037,,,65
+hybrid+rerank,0.9006,0.7356,1.0,0.8615,0.8783,3100,50211,1167,1115,51,4.32,0.0,0.3696,,,65
 ```
 
 > 注：hybrid+rerank 的 P95=50211ms 为 R4 已知异常（并发首触模型加载竞争，根因见 §4.4 R8 记录），修复后以重跑结果为准。
