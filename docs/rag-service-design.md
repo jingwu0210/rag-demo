@@ -91,11 +91,9 @@
 | v1.8 | 2026-08-13 | R8 rerank 并发缺陷修复（互斥锁 + max_workers 5）+ 启动预热（B 方案：API startup + 评估 runner 预热，延迟计时不含模型加载税）+ 文档一致性大扫除（/simplify）：虚构示例数据模板化（ISSUE-001 改用真实案例 R2→R3）；600ms 估算全量替换为实测 816ms/2248ms；doc_type/out_of_scope 关键词层残留清理（§2.4/§3.2/§4.1/§4.3/§4.6/§5.5）；Compliance 6 档制与 Style 绝对打分同步正文与附录；CSV 样例改用 R4 实测数据；拒答文案收敛到 config.yaml 单源；删除 cache.l2 配置孤儿键（铁律 4，L2 改文档级扩展点） |
 | v1.9 | 2026-08-15 | Compliance judge 判定规则补强（A 方案，重放验证实证）：0 分判定前逐条核对参考文档 + 无关 chunk 不扣分，修正"答案正确但判 0"误判（病假样本 7/7 复现→7/7 修正）；judge 输出"分数\|理由"格式，理由持久化进 per_qa（judge_reason 字段）；两段式 judge（B 方案）重放验证无增量价值不采用 |
 | v1.10 | 2026-08-15 | Compliance 聚合口径变更（替代 v1.6 立场 a）：judge 0 分参与 compliance 均值（有答案但未回答 = 生成质量缺陷）；unanswered_rate 语义改为"系统未作答（refused/timeout/空答案）占比"，分母改为 total_requests。文档加目录（68 条链接，GitHub slug 锚点） |
-| v1.11 | 2026-08-15 | P1h 双通道 RRF 二次融合（修复 rerank 排序失真）：rerank 后 final = 1/(k+粗排位次) + 1/(k+rerank位次)，精排不独裁；Reranker.rerank 增加 top_n 参数（哨兵区分默认/None=全量/N）；依据 R4 失真证据（API Spec -78%、休假制度 -49%、通用章节 +36%） |
-| v1.12 | 2026-08-15 | P2 hybrid 融合噪声过滤：RRF 加权（vector_weight 1.0 / bm25_weight 0.8 软降权）+ 融合后 vec_sim ≥ 0.45 硬过滤（实测依据：术语类 17 条答案依据 chunk 余弦全部 ≥0.4781 零误杀，铁律 6 验证）；ScoredDoc 增加 vec_sim 字段 |
+| v1.11 | 2026-08-15 | P1h 双通道 RRF 二次融合（修复 rerank 排序失真）：rerank 后 final = 1/(k+粗排位次) + 1/(k+rerank位次)，精排不独裁（rrf_k 与粗排融合共用 retrieval.fusion.rrf_k）；Reranker.rerank 增加 top_n 参数（不传=config 截断 / 显式 None=全量供融合取位次 / N=截断）；依据 R4 失真证据（API Spec -78%、休假制度 -49%、通用章节 +36%），见 §4.4 |
+| v1.12 | 2026-08-15 | P2 hybrid 融合噪声过滤：RRF 加权（vector_weight 1.0 / bm25_weight 0.8 软降权）+ 融合后 vec_sim ≥ 0.45 硬过滤（纯 BM25 命中视为 0 被滤，过滤在 AdaptiveK 之前，rerank 粗排池同样受益；vector_top1_sim 旁路语义不变）。实测依据：术语类 17 条答案依据 chunk 余弦全部 ≥0.4781 零误杀（铁律 6 验证），见 §4.3 ①.1 |
 | v1.13 | 2026-08-15 | P4 分层指标报表（oos_refusal_rate / normal_refusal_rate / 未作答三类分解，CSV 15→17 列）；测试集 v2（80 条 = 原 65 条 + 三类区分度样本 15 条，多义词类语料不支持不硬造）；发现 R4 时 chroma HNSW 索引未完整落盘（与元数据不同步，挂账观察） |
-| v1.11 | 2026-08-15 | R4 排序失真修复（P1h）：rerank 后双通道 RRF 二次融合 — final = 1/(60+粗排位次) + 1/(60+rerank位次)，精排不独裁（两信号各投一票，rrf_k 与粗排融合共用 retrieval.fusion.rrf_k）；rerank() 增加可选 top_n（显式 None = 全量排序供融合取位次，不传保持 config 截断）。根因证据与决策见 §4.4 设计决策表 |
-| v1.12 | 2026-08-15 | R4 hybrid 噪声过滤（P2）：RRF 融合加权（vector_weight=1.0 / bm25_weight=0.8，BM25 路软降权）+ 融合后 vec_sim ≥ 0.45 硬过滤（纯 BM25 命中视为 0 被滤，过滤在 AdaptiveK 之前，rerank 粗排池同样受益；vector_top1_sim 旁路语义不变）。实测依据：术语类 17 条答案依据 chunk 余弦全部 ≥0.4781，0.45 零误杀；普通中文样本全部 >0.45。见 §4.3 ①.1 |
 
 ---
 
