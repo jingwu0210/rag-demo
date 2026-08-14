@@ -12,7 +12,8 @@ from unittest.mock import MagicMock, patch
 
 from core.config import ConfigRegistry
 from eval.report import compare_runs, generate_report
-from eval.runner import apply_config_mode, compute_test_set_hash, run_comparison
+from eval.runner import (_warmup_reranker, apply_config_mode, compute_test_set_hash,
+                         run_comparison)
 from eval.test_set import SAMPLE_TEST_SET, load_test_set
 from services.chat import ChatResponse
 from storage.sqlite_client import get_db, init_db
@@ -25,6 +26,10 @@ class FakeChatService:
 
     def __init__(self):
         self.calls = []
+        # B 方案预热入口：mock 掉 reranker，验证 run_comparison 只在
+        # hybrid+rerank 配置触发 ensure_loaded
+        self.retrieval = MagicMock()
+        self.retrieval.reranker.ensure_loaded = MagicMock()
 
     async def process(self, query: str, session_id: str = None) -> ChatResponse:
         self.calls.append(query)
@@ -107,6 +112,23 @@ def test_load_test_set_from_file(tmp_path):
 
 # ═══ 2. 配置模式 ═══════════════════════════════════════════
 
+def test_warmup_reranker_calls_ensure_loaded():
+    """B 方案：预热调用 reranker.ensure_loaded（成功路径）"""
+    service = MagicMock()
+    _warmup_reranker(service)
+    service.retrieval.reranker.ensure_loaded.assert_called_once()
+
+
+def test_warmup_reranker_failure_does_not_abort():
+    """B 方案防御承诺：预热失败（模型不可用等）→ 记 warning，不抛异常中断评估。
+
+    运行时每个请求的 rerank 前仍有 ensure_loaded + 降级兜底，评估不因预热失败而停。
+    """
+    service = MagicMock()
+    service.retrieval.reranker.ensure_loaded.side_effect = RuntimeError("model load fail")
+    _warmup_reranker(service)   # 不抛异常
+
+
 def test_apply_config_mode():
     ConfigRegistry.init("config.yaml")
     apply_config_mode("vector-only")
@@ -139,6 +161,8 @@ def test_run_comparison_executes_three_configs(tmp_path):
     assert {r["config_name"] for r in results} == {"vector-only", "hybrid", "hybrid+rerank"}
     # 每条 QA 都调用了 chat_service
     assert len(service.calls) == 3 * 5
+    # B 方案预热：只在 hybrid+rerank 配置触发一次（vector-only/hybrid 不预热）
+    assert service.retrieval.reranker.ensure_loaded.call_count == 1
 
     for r in results:
         assert r["run_id"] == "run_e2e"

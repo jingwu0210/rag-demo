@@ -249,6 +249,31 @@ def test_health_degraded_on_component_failure():
     assert body["concurrency"] == {"active": 0, "max": 10}
 
 
+def test_startup_warmup_failure_does_not_crash(tmp_path):
+    """B 方案防御承诺：startup 预热 reranker 失败 → warning，不置 startup_error。
+
+    服务照常启动（运行时每个请求仍有 ensure_loaded + rerank 降级兜底）。
+    patch 重组件构造：避免真实加载 BGE-M3/BGE-Reranker（test 约定）。
+    """
+    from api.app import startup
+
+    ConfigRegistry.override("chromadb.persist_directory", str(tmp_path / "chroma"))
+    mock_reranker = MagicMock()
+    mock_reranker.ensure_loaded.side_effect = RuntimeError("预热失败")
+    mock_reranker_cls = MagicMock(return_value=mock_reranker)
+
+    with patch("core.embedder.Embedder"), \
+         patch("core.reranker.Reranker", mock_reranker_cls), \
+         patch("core.retriever.Retriever"), \
+         patch("storage.chroma_client.ChromaStore"):
+        asyncio.run(startup())
+
+    assert app.state.startup_error is None
+    mock_reranker.ensure_loaded.assert_called_once()
+    # 组件单例仍已挂载（预热失败不影响启动）
+    assert app.state.chat_service is not None
+
+
 # ═══ 4. 评估触发 / 结果查询 / 运营报表（I-2 终审接线）═══════
 
 async def _insert_metrics_rows():

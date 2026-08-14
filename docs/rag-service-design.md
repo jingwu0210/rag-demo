@@ -17,7 +17,7 @@
 | v1.5 | 2026-08-13 | §6.3 新增"评估输出物管理"：三层数据生命周期（eval_history 权威/报表文件时间戳归档/评估档案交付物）；报表固定名覆盖的设计缺陷补记 |
 | v1.6 | 2026-08-13 | 关键词层删除（F1 doc_type 分类 + F2 out_of_scope 黑名单）：静态关键词表不可维护且无法验证正确性，检索全库不过滤、OOS 回归空结果+置信度两层；Compliance judge 6 档制（0=未回答）+ unanswered_rate；语料修复（注入样本独立存放 + 生成器自动换行） |
 | v1.7 | 2026-08-13 | 评估并发化：问答并发 eval.concurrency=5 + Ragas 双指标并行（串行 40 分钟 → 8-10 分钟） |
-| v1.8 | 2026-08-13 | R8 rerank 并发缺陷修复（互斥锁 + max_workers 5）+ 文档一致性大扫除（/simplify）：虚构示例数据模板化（ISSUE-001 改用真实案例 R2→R3）；600ms 估算全量替换为实测 816ms/2248ms；doc_type/out_of_scope 关键词层残留清理（§2.4/§3.2/§4.1/§4.3/§4.6/§5.5）；Compliance 6 档制与 Style 绝对打分同步正文与附录；CSV 样例改用 R4 实测数据；拒答文案收敛到 config.yaml 单源；删除 cache.l2 配置孤儿键（铁律 4，L2 改文档级扩展点） |
+| v1.8 | 2026-08-13 | R8 rerank 并发缺陷修复（互斥锁 + max_workers 5）+ 启动预热（B 方案：API startup + 评估 runner 预热，延迟计时不含模型加载税）+ 文档一致性大扫除（/simplify）：虚构示例数据模板化（ISSUE-001 改用真实案例 R2→R3）；600ms 估算全量替换为实测 816ms/2248ms；doc_type/out_of_scope 关键词层残留清理（§2.4/§3.2/§4.1/§4.3/§4.6/§5.5）；Compliance 6 档制与 Style 绝对打分同步正文与附录；CSV 样例改用 R4 实测数据；拒答文案收敛到 config.yaml 单源；删除 cache.l2 配置孤儿键（铁律 4，L2 改文档级扩展点） |
 
 ---
 
@@ -1117,6 +1117,7 @@ Cross-Encoder 精排模块，对粗排候选做逐对打分。在 `config.rerank
 | 模型加载互斥锁（R8） | R4 评估并发 5 首触：无锁时 3 线程同时加载 CrossEncoder 到 MPS，设备初始化竞争使加载从 ~3.4s 爆炸到 ~47.8s（5 样本降级）；`threading.Lock` double-checked 串行化加载 |
 | max_workers = 5（R8） | 容量模型：最坏延迟 = ceil(并发/worker) × T(816ms) ≤ 2s 预算 → 5 并发 1 轮 0.82s、10 并发 2 轮 1.63s。注：5 路 MPS 并发推理无放大未经实测，若退化 >1.6s/次应回退 4 |
 | 预热排除在阶段超时外 | 首次加载 ~3.4s > 2s 预算，warmup 由独立 wait_for(180) 保护；锁修后并发首触只加载一次 |
+| 启动预热（B 方案，v1.8） | 模型加载挪到计时外：API startup 预热 reranker（独立 try/except，失败 warning 不崩，运行时仍有降级兜底）；评估 runner 切到 hybrid+rerank 配置后、QA 计时前预热一次。效果：首请求/全部评估样本的延迟不含 ~5.5s 加载税 |
 
 #### 输入输出接口
 
