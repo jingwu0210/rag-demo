@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 
 # ══════════════════════════════════════════════════════════
 # eval.sh — 一键评估（与 run.sh 同一交付契约与输出风格）
-# 前置检查 → 三配置评估 → 结果摘要打印到终端
+# 前置检查 → 三配置评估（进度条）→ 结果摘要打印到终端
 # ══════════════════════════════════════════════════════════
 
 # ── ① 前置检查 ──────────────────────────────────────────
@@ -75,16 +75,54 @@ ConfigRegistry.init('config.yaml')
 print(len(ConfigRegistry.get('eval.compare_configs', [])))
 " 2>/dev/null || echo "3")
 
-# ── ② 评估 ──────────────────────────────────────────────
+# ── ② 评估（后台跑 + 进度条）────────────────────────────
 echo "🚀 开始评估"
 echo "   测试集: ${TEST_SET} 条 × ${CONFIGS} 个检索配置（vector-only / hybrid / hybrid+rerank）"
-echo "   并发: 5，预计 15-25 分钟（含 LLM judge 打分）"
-echo "   进度日志: tail -f $LOG_FILE"
+echo "   并发: 5（config eval.concurrency），预计 40-50 分钟（A 方案全文 rerank 后）"
 # stdout = structlog JSON 结构化日志（符合日志字段字典）；
-# stderr = 第三方库裸噪音（urllib3 警告/chromadb telemetry/tokenizers），
-# 单独存 .stderr.log，不污染主日志文件
+# stderr = 第三方库裸噪音，单独存 .stderr.log，不污染主日志文件
 .venv/bin/python -m eval.runner --output workspace/results/ \
-    > "$LOG_FILE" 2> "${LOG_FILE%.log}.stderr.log"
+    > "$LOG_FILE" 2> "${LOG_FILE%.log}.stderr.log" &
+RUNNER_PID=$!
+
+# 进度条：轮询日志里的 eval_progress 事件（done/total/config）
+TOTAL_QA=$((TEST_SET * CONFIGS))
+DONE=0
+while kill -0 "$RUNNER_PID" 2>/dev/null; do
+    PROG=$(.venv/bin/python -c "
+import json, sys
+try:
+    with open('$LOG_FILE') as f:
+        lines = f.readlines()
+    done = total = 0
+    cfg = ''
+    for l in lines:
+        try:
+            d = json.loads(l)
+        except Exception:
+            continue
+        if d.get('event') == 'eval_progress':
+            done = d.get('done', done)
+            total = d.get('total', total)
+            cfg = d.get('config', cfg)
+    # 累加已完成配置的 QA 数（每配置 done 从 0 起，需按 config 累计——简化：显示当前配置进度）
+    print(f'{done} {total} {cfg}', end='')
+except Exception:
+    print('0 0', end='')
+")
+    read -r DONE TOTAL CFG <<< "$PROG"
+    if [ "${TOTAL:-0}" -gt 0 ] 2>/dev/null; then
+        PCT=$((DONE * 100 / TOTAL))
+        BAR_LEN=30
+        FILLED=$((PCT * BAR_LEN / 100))
+        BAR=$(printf '%*s' "$FILLED" '' | tr ' ' '█')
+        EMPTY=$(printf '%*s' "$((BAR_LEN - FILLED))" '' | tr ' ' '░')
+        printf "\r  [%s%s] %3d%%  %s 配置 %s/%s  " "$BAR" "$EMPTY" "$PCT" "$CFG" "$DONE" "$TOTAL"
+    fi
+    sleep 1
+done
+printf "\n"
+wait "$RUNNER_PID"
 
 # ── ③ 结果摘要（终端直接看三配置关键指标）──────────────────
 echo ""

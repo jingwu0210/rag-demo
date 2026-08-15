@@ -11,7 +11,7 @@
 |------|------|
 | 形态 | 无框架纯静态单文件（HTML + CSS + JS 全部内嵌），无构建步骤、无外部依赖 |
 | 路径 | GET `/rag-gen-ai-service-demo` 返回静态页；页面内全部请求为同源相对路径 |
-| 目的 | 将服务 7 个业务 API（/chat、/ingest、/eval/run、/eval/result、/report、/health、/config）全部可视化演示，替代 curl 交互 |
+| 目的 | 将服务 6 个业务 API（/chat、/ingest、/eval/result、/report、/health、/config）全部可视化演示，替代 curl 交互 |
 | 场景 | 单实例本地演示；无鉴权、无路由、无持久化服务端状态（会话/模式偏好存浏览器 localStorage） |
 
 页面为单页应用式视图切换：sidebar 按钮控制 section 显隐（`.page.active`），无 URL 路由。
@@ -47,7 +47,7 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 |------|---------|---------|
 | 💬 Chat | POST /chat | 请求级检索模式切换、多轮会话（localStorage）、答案/来源/prompt 展示 |
 | 📥 Ingest | POST /ingest | 拖拽上传 + doc_type/version 参数、入库结果卡片 |
-| 🚀📊 Eval | POST /eval/run、GET /eval/result | 触发（202 + run_id）、六指标对比 + 分层视图 + per_qa 明细 |
+| 🚀📊 Eval | GET /eval/result | 结果只读展示：六指标对比 + 分层视图 + per_qa 明细（评估走 eval.sh） |
 | 📈 Report | GET /report | CSV 前端解析、KPI 卡片 + 全量指标表 |
 | 🔧 Maintenance | GET /health、GET /logs、GET /db/tables、GET /db/table/{name} | 三子 tab：Health / Logs / Database |
 | ⚙️ Config | GET /config | config.yaml 只读树，分组折叠 |
@@ -71,16 +71,15 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 - **参数**：doc_type 下拉（handbook / compliance / technical / architecture）+ version 文本框（默认 v1.0，hint "同文档新版本将替换旧 chunk"）
 - **结果卡片**：status 着色（ingested 绿「已入库」/ replaced 琥珀「已替换旧版本」/ skipped 灰「已跳过」）+ 字段网格 chunks_created / chunks_replaced / doc_hash / source_file / version，reason 有则追加显示
 
-### 4.3 🚀📊 Eval（POST /eval/run + GET /eval/result）
+### 4.3 🚀📊 Eval（GET /eval/result）
 
-单页上下两个 section 合并（触发 + 结果查询）。
+评估由终端 eval.sh 触发（三配置对比 → workspace/results/），页面只读展示评估配置与结果。
 
-**上 section — 评估触发**
+**评估信息（只读）**
 
 - 只读信息卡四张：测试集路径（叠加最近一次评估条数）、对比配置 chips、并发度（"问答 + judge"）、最近一次 run_id——数据源为 GET /config 与 GET /eval/result（无记录不阻塞页面）
-- "🚀 触发评估" → POST /eval/run 返回 202 + run_id，展示 run_id 并附带"查看结果"按钮直接跳转查询
 
-**下 section — 评估结果**
+**评估结果**
 
 - 查询行：run_id 输入框（留空 = 最近一次）+ "加载 per_qa 明细" checkbox（默认勾选，映射 detail=true）+ 查询按钮（Enter 亦可触发）
 - 渲染顺序：
@@ -138,12 +137,7 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 - 响应：`{status: ingested|skipped|replaced, chunks_created, chunks_replaced, doc_hash, source_file, version, reason}`
 - 入库异常 → 500 `{detail}`
 
-### 5.3 POST /eval/run
-
-- 请求无 body；响应 202：`{run_id: "eval_YYYYMMDD_HHMMSS_xxxxxx"}`（后台线程执行三配置对比）
-- chat_service 未初始化 → 503
-
-### 5.4 GET /eval/result（扩展：+detail=true）
+### 5.3 GET /eval/result（扩展：+detail=true）
 
 - 参数：`run_id`（缺省 = 最近一次 run）、`detail`（true → 追加 per_qa）
 - 响应：`{run_id, results: [指标行按 config_name 排序], per_qa?: {config_name: [per_qa 条目]}}`
@@ -151,31 +145,31 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 - per_qa 条目字段：question、answer、refused、refusal_reason、from_cache、timeout、faithfulness、context_precision、refusal_appropriateness、answer_compliance、judge_reason（"分数|理由"）、latency_ms、tokens_total、sources_count、is_out_of_scope 等（不含 chunks_text）
 - 无记录：`{run_id: null, results: []}`
 
-### 5.5 GET /logs
+### 5.4 GET /logs
 
 - 无参：`{files: [*.log 文件名，排除 *.stderr.log，按 mtime 倒序], default: 最新文件}`
 - `?file=<name>&lines=N`：`{file, lines, content}`；N clamp 到 [1, 1000]（前端下拉含 5000 选项，后端上限 1000）
 - 文件名含 `/` `\` `..`、以 `.` 开头或非 `.log` 结尾，或文件不存在 → 404
 
-### 5.6 GET /db/tables
+### 5.5 GET /db/tables
 
 - 响应：`{tables: [{name, rows}]}`——白名单六表（cache_entries / eval_history / request_metrics / turns / sessions / ingest_log），表缺失视为 rows=0
 
-### 5.7 GET /db/table/{name}
+### 5.6 GET /db/table/{name}
 
 - 参数：`limit`（缺省 50，clamp [1, 200]）
 - 响应：`{name, columns: [列名], rows: [值数组行]}`（按列顺序对齐；字符串字段超 500 字符截断）
 - 非白名单表名 → 404
 
-### 5.8 GET /config
+### 5.7 GET /config
 
 - 响应：config.yaml 解析后的 dict（含 RAG_ 环境变量覆盖），JSON
 
-### 5.9 GET /rag-gen-ai-service-demo
+### 5.8 GET /rag-gen-ai-service-demo
 
 - 响应：text/html 静态页（FileResponse）；文件缺失 → 404
 
-### 5.10 GET /health（演示 UI 消费）
+### 5.9 GET /health（演示 UI 消费）
 
 - 响应：`{status: ok|degraded, components: {chromadb, sqlite, llm: ok|error}, concurrency: {active, max}}`
 - 头部徽章 15s 轮询；Maintenance>Health 手动刷新

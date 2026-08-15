@@ -327,7 +327,7 @@ def test_startup_warmup_failure_does_not_crash(tmp_path):
     assert app.state.chat_service is not None
 
 
-# ═══ 4. 评估触发 / 结果查询 / 运营报表（I-2 终审接线）═══════
+# ═══ 4. 评估结果查询 / 运营报表（I-2 终审接线）════════════
 
 async def _insert_metrics_rows():
     """插入 3 行 request_metrics：2 次缓存命中 + 1 次拒答，latency 100/200/300"""
@@ -442,24 +442,6 @@ def test_report_csv_empty_table():
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
     assert r.text.strip() == "metric,value"
-
-
-def test_eval_run_returns_202_with_run_id():
-    """POST /eval/run → 202 + {run_id}；后台任务经 to_thread 启动（mock 为 no-op）"""
-    svc = MagicMock()
-    app.state.chat_service = svc
-
-    with patch("api.routes._run_eval_job") as job:
-        r = TestClient(app).post("/eval/run")
-
-    assert r.status_code == 202
-    body = r.json()
-    assert body["run_id"].startswith("eval_")
-    assert len(body["run_id"]) > len("eval_")
-    # 后台任务确实被触发（to_thread 包裹，不跑在事件循环线程）
-    job.assert_called_once()
-    assert job.call_args[0][0] is svc
-    assert job.call_args[0][1] == body["run_id"]
 
 
 def test_eval_result_by_run_id():
@@ -938,3 +920,48 @@ def test_db_table_unknown_404():
     r = TestClient(app).get("/db/table/evil_table")
 
     assert r.status_code == 404
+
+
+# ── 6b. source 三类区分（chat/eval/ingest）──
+
+def test_db_table_source_ingest_accepted():
+    """source='ingest' 为合法值域：含 source 列表按 ingest 等值过滤（无 ingest 行 → 0）；
+    无 source 列的表（cache_entries）忽略 source 参数返回全量"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_cache_rows())
+
+    r = TestClient(app).get("/db/table/turns", params={"source": "ingest"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 0              # 无 ingest 来源的 turn
+
+    r = TestClient(app).get("/db/table/cache_entries", params={"source": "ingest"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 2              # 无 source 列 → source 参数被忽略，全量
+
+
+def test_db_tables_source_ingest():
+    """db_tables source='ingest'：ingest_log 显示全量（无 source 列，has_source=False）；
+    turns/request_metrics 按 ingest 等值过滤（当前无 ingest 行 → 0）"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_turns_with_source())
+    asyncio.run(_insert_cache_rows())
+
+    r = TestClient(app).get("/db/tables", params={"source": "ingest"})
+    assert r.status_code == 200
+    t = {x["name"]: x for x in r.json()["tables"]}
+    assert t["ingest_log"]["rows"] == 0
+    assert t["ingest_log"]["has_source"] is False
+    assert t["turns"]["rows"] == 0             # 三行 turn 均为 chat/eval，非 ingest
+    assert t["request_metrics"]["rows"] == 0
+    assert t["cache_entries"]["rows"] == 2     # 无 source 列 → 全表
+
+
+def test_db_source_invalid_422():
+    """非法 source 值 → 422（值域 chat/eval/ingest）"""
+    asyncio.run(init_db())
+
+    r = TestClient(app).get("/db/tables", params={"source": "bogus"})
+    assert r.status_code == 422
+
+    r = TestClient(app).get("/db/table/turns", params={"source": "bogus"})
+    assert r.status_code == 422

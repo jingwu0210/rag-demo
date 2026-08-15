@@ -142,10 +142,7 @@ echo "🚀 启动 RAG QA Service..."
 # stdout/stderr 分别落盘 workspace/logs/run-<时间戳>.log / .stderr.log，
 # Maintenance > Logs 页即可查看 chat 请求日志（/logs 接口读该目录）
 RUN_LOG="workspace/logs/run-$(date +%Y%m%d-%H%M%S)"
-# --loop asyncio：强制标准事件循环。uvicorn[standard] 默认用 uvloop，而 ragas 的
-# nest_asyncio 无法 patch uvloop.Loop → eval/run 报"Can't patch loop of type
-# uvloop.Loop"（实测）。asyncio 循环下 nest_asyncio 可 patch，评估后台任务可跑。
-.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000 --loop asyncio > "${RUN_LOG}.log" 2> "${RUN_LOG}.stderr.log" &
+.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000 > "${RUN_LOG}.log" 2> "${RUN_LOG}.stderr.log" &
 SERVER_PID=$!
 
 READY=0

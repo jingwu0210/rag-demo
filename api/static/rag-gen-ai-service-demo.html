@@ -214,7 +214,6 @@
   .info-card .v{font-size:13px;color:var(--ink);word-break:break-all}
   .info-card .v .chip{margin:2px 3px 2px 0}
   .trigger-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  .run-id-show{font:12.5px var(--mono);color:var(--teal);word-break:break-all}
   .query-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
   .query-row input[type=text]{flex:1;min-width:220px;font-family:var(--mono);font-size:12.5px}
   .query-row .ck{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--mut);cursor:pointer}
@@ -476,9 +475,9 @@
 
     <!-- ═══════════════ 3. Eval ═══════════════ -->
     <section class="page" id="page-eval">
-      <!-- 上：评估触发 -->
+      <!-- 评估信息（只读） -->
       <div class="panel">
-        <div class="panel-head"><span class="k">评估触发</span><span class="desc">三配置对比，后台执行，立即返回 202</span></div>
+        <div class="panel-head"><span class="k">评估信息</span><span class="desc">评估配置只读展示，评估由 eval.sh 终端触发</span></div>
         <div class="panel-body">
           <div class="info-cards" id="evalInfo">
             <div class="info-card"><div class="l">测试集</div><div class="v" id="evalSet">—</div></div>
@@ -486,13 +485,9 @@
             <div class="info-card"><div class="l">并发度</div><div class="v" id="evalConc">—</div></div>
             <div class="info-card"><div class="l">最近一次运行</div><div class="v" id="evalLast">—</div></div>
           </div>
-          <div class="trigger-row">
-            <button class="btn" id="evalRunBtn">🚀 触发评估</button>
-            <span class="run-id-show" id="evalRunOut"></span>
-          </div>
         </div>
       </div>
-      <!-- 下：结果查询 -->
+      <!-- 评估结果查询 -->
       <div class="panel">
         <div class="panel-head"><span class="k">评估结果</span><span class="desc">六指标对比 + 分层视图 + per_qa 明细</span></div>
         <div class="panel-body">
@@ -550,6 +545,7 @@
               <button class="seg-btn active" data-source="all">全部</button>
               <button class="seg-btn" data-source="chat">Chat 服务日志</button>
               <button class="seg-btn" data-source="eval">Eval 评估日志</button>
+              <button class="seg-btn" data-source="ingest">Ingest 入库日志</button>
             </div>
             <div class="log-bar">
               <div class="fld"><label>日志文件</label><select id="logFile"></select></div>
@@ -574,6 +570,7 @@
               <button class="seg-btn active" data-source="all">全部</button>
               <button class="seg-btn" data-source="chat">Chat</button>
               <button class="seg-btn" data-source="eval">Eval</button>
+              <button class="seg-btn" data-source="ingest">Ingest</button>
             </div>
             <div class="db-list" id="dbTables"><div class="loading"><span class="spin"></span>正在加载表清单…</div></div>
             <div id="dbPreview"></div>
@@ -1176,31 +1173,6 @@ async function loadEvalMeta(){
   }catch(err){ /* 尚无评估记录 */ }
 }
 
-/* 触发评估 → 202 + run_id + 查看结果 */
-async function triggerEval(){
-  const btn = $("evalRunBtn");
-  btn.disabled = true;
-  btn.textContent = "⏳ 评估启动中…";
-  $("evalRunOut").textContent = "";
-  try{
-    const data = await apiJSON("/eval/run", { method: "POST" });
-    const runId = data.run_id || "—";
-    $("evalRunOut").textContent = "✅ 已触发：" + runId + "（后台执行中，完成后可查看结果）";
-    $("evalRunId").value = runId;
-    const viewBtn = el("button", "btn ghost", "查看结果");
-    viewBtn.style.marginLeft = "8px";
-    viewBtn.addEventListener("click", () => queryEval());
-    $("evalRunOut").append(viewBtn);
-    toast("评估已触发（202），run_id: " + runId, "ok");
-  }catch(err){
-    $("evalRunOut").textContent = "";
-    toast("评估触发失败：" + err.message);
-  }
-  btn.disabled = false;
-  btn.textContent = "🚀 触发评估";
-}
-$("evalRunBtn").addEventListener("click", triggerEval);
-
 /* 六指标对比表：行=指标，列=配置 */
 function renderCompareTable(rows){
   const box = el("div", "tbl-wrap");
@@ -1548,13 +1520,15 @@ async function loadHealth(){
 $("healthRefreshBtn").addEventListener("click", loadHealth);
 
 /* ② Logs（content 行反转最新在前 + 关键词过滤 + 内存分页）
-   来源次级菜单：全部 / Chat 服务日志(run-*) / Eval 评估日志(eval-*)，按文件名前缀过滤 */
+   来源次级菜单：全部 / Chat 服务日志(run-*) / Eval 评估日志(eval-*) / Ingest 入库日志(ingest-*)，
+   按文件名前缀过滤 */
 const logState = { lines: [], page: 1, pageSize: 100 };
-const logSourceState = { source: "all" };   // all | chat | eval
+const logSourceState = { source: "all" };   // all | chat | eval | ingest
 
 function logSourceMatch(name){
   if(logSourceState.source === "all") return true;
-  const prefix = logSourceState.source === "chat" ? "run-" : "eval-";
+  const prefix = logSourceState.source === "chat" ? "run-"
+    : logSourceState.source === "eval" ? "eval-" : "ingest-";
   return String(name).startsWith(prefix);
 }
 
@@ -1677,25 +1651,42 @@ $("logFilter").addEventListener("input", () => {
 });
 
 /* ③ Database（服务端分页 limit/offset + q 关键词过滤 + 分页条）
-   来源次级菜单：全部 / Chat / Eval — 对含 source 列的表（request_metrics / turns）
-   按 source 等值过滤；无 source 列的表后端忽略该参数返回全部（行数不分来源）。 */
+   来源次级菜单：全部 / Chat / Eval / Ingest — 对含 source 列的表（request_metrics / turns）
+   按 source 等值过滤；无 source 列的表后端忽略该参数返回全部（行数不分来源）。
+   表清单按当前 panel 过滤（dbTableVisible）：eval_history→eval、ingest_log→ingest、
+   request_metrics/turns→chat+eval、cache_entries/sessions→全部 panel 均显示。 */
 const dbState = { table: null, page: 1, pageSize: 100, q: "" };
-const dbSourceState = { source: "all" };   // all | chat | eval
+const dbSourceState = { source: "all" };   // all | chat | eval | ingest
 let dbFilterTimer = null;
 /* 表含义提示：卡片 title（tooltip）用途说明 */
 const DB_TABLE_DESC = {
-  cache_entries: "L1 缓存（chat/eval 共用，无来源列，行数不分来源）",
-  eval_history: "评估历史（仅 eval，无来源列）",
+  cache_entries: "L1 缓存（chat/eval 共用，无来源列，行数不分来源；仅在「全部」panel 显示）",
+  eval_history: "评估历史（仅 eval，无来源列；仅在「Eval」panel 显示）",
   request_metrics: "请求指标（含来源列，可按 Chat/Eval 过滤）",
   turns: "对话记录（含来源列，可按 Chat/Eval 过滤）",
-  sessions: "会话（chat 为主，无来源列）",
-  ingest_log: "入库日志（仅 ingest，无来源列，对 chat/eval 均无意义）",
+  sessions: "会话（无来源列，行数不分来源；仅在「全部」panel 显示）",
+  ingest_log: "入库日志（仅 ingest，无来源列；仅在「Ingest」panel 显示）",
 };
 /* 数据来源提示：某表 source 分布（每表首次打开时计算一次，缓存于 dbSourceDist/dbSourceDistFor）。
    历史数据（R1-R7 评估 + demo 聊天）在 ALTER 迁移时 source 全部默认归 'chat'，无法追溯真实来源，
    仅在分布单一（全 chat / 全 eval）时展示提示，帮助理解为何切 Eval 为空 / Chat 混入评估数据。 */
 let dbSourceDist = null;      // {hasSource, all, chat, eval} | null
 let dbSourceDistFor = null;   // 分布对应的表名
+
+/* 表→归属映射（Database 页按 panel 过滤表清单，各表只在其归属 panel 显示）：
+   eval_history→eval、ingest_log→ingest、request_metrics/turns→chat+eval、
+   cache_entries/sessions→全部（无来源列且不专属任何 source，仅在「全部」panel 显示） */
+function dbTableOwnership(name){
+  if(name === "eval_history") return ["eval"];
+  if(name === "ingest_log") return ["ingest"];
+  if(name === "request_metrics" || name === "turns") return ["chat", "eval"];
+  return ["all"];
+}
+function dbTableVisible(name){
+  const src = dbSourceState.source;
+  if(src === "all") return true;                       // 全部 panel → 所有表
+  return dbTableOwnership(name).includes(src);         // 否则仅归属 panel 显示
+}
 
 /* 计算某表 source 分布：并行取 all/chat/eval 三组行数（limit=1 仅用 total）。
    无 source 列的表后端忽略 source 参数 → chat/eval 均等于 all，hasSource=false，不触发提示。 */
@@ -1741,7 +1732,8 @@ async function loadTables(){
       ? "/db/tables?source=" + encodeURIComponent(dbSourceState.source)
       : "/db/tables";
     const d = await apiJSON(url);
-    const tables = Array.isArray(d) ? d : (d.tables || []);
+    const tables = (Array.isArray(d) ? d : (d.tables || []))
+      .filter(t => dbTableVisible(typeof t === "string" ? t : (t.name || t.table || "")));
     box.replaceChildren();
     if(!tables.length){
       box.append(el("div", "empty", "数据库中没有可用的表。"));
