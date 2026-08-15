@@ -115,7 +115,8 @@ def test_retrieval_service_rerank_reorders_docs():
     assert out.degraded is False
     assert set(out.timing_ms) == {"retrieval", "rerank", "total"}
     # 调用点按函数签名传位置参数（run_in_executor 仅支持位置参数）
-    retriever.retrieve.assert_awaited_with("年假有几天", 30, "handbook", True)  # candidates_multiplier=1.5
+    retriever.retrieve.assert_awaited_with(
+        "年假有几天", 30, "handbook", True, "hybrid+rerank")  # candidates_multiplier=1.5
     reranker.rerank.assert_awaited_once()
     scanner.scan.assert_called_once()
 
@@ -202,7 +203,7 @@ def test_retrieval_service_retrieval_timeout_empty_docs():
     ConfigRegistry.override("retrieval.timeout", 0.05)
     retriever = MagicMock()
 
-    async def slow_retrieve(query, top_k=20, doc_type_filter=None, skip_adaptive=False):
+    async def slow_retrieve(query, top_k=20, doc_type_filter=None, skip_adaptive=False, mode=None):
         await asyncio.sleep(0.5)
         return RetrievalResult(docs=[_scored_doc("c1", "t", 0.9)], mode="hybrid")
 
@@ -249,7 +250,7 @@ def test_stage_timeout_reaches_sync_retrieval():
     ConfigRegistry.init("config.yaml")
     ConfigRegistry.override("retrieval.timeout", 0.1)
 
-    def slow_retrieve(query, top_k=20, doc_type_filter=None, skip_adaptive=False):
+    def slow_retrieve(query, top_k=20, doc_type_filter=None, skip_adaptive=False, mode=None):
         time.sleep(2)   # 同步阻塞 2s
         return RetrievalResult(docs=[], mode="vector-only")
 
@@ -270,7 +271,7 @@ def test_event_loop_responsive_during_blocked_retrieval():
     ConfigRegistry.init("config.yaml")
     ConfigRegistry.override("retrieval.timeout", 0.15)   # 心跳窗口 0.05s×2 < 超时，避免边界竞争
 
-    def slow_retrieve(query, top_k=20, doc_type_filter=None, skip_adaptive=False):
+    def slow_retrieve(query, top_k=20, doc_type_filter=None, skip_adaptive=False, mode=None):
         time.sleep(2)
         return RetrievalResult(docs=[], mode="vector-only")
 
@@ -366,7 +367,8 @@ def test_chat_service_full_flow(tmp_path):
     assert resp.timing_ms["total"] >= 0
     assert resp.token_usage == {"prompt": 10, "completion": 20, "total": 30}
     assert resp.refused is False and resp.from_cache is False and resp.partial is False
-    deps["retrieval"].retrieve.assert_awaited_with("年假有几天？", "general")  # v1.6: classify 恒 general
+    # v1.6: classify 恒 general；mode=None → 回落到 config 全局值
+    deps["retrieval"].retrieve.assert_awaited_with("年假有几天？", "general", "hybrid+rerank")
     deps["cache"].put.assert_awaited_once()
 
     # ── SQLite 持久化真实验证（tempfile）──
@@ -499,6 +501,19 @@ def test_chat_service_cache_disabled(tmp_path):
     assert resp.from_cache is False
     deps["cache"].get.assert_not_awaited()
     deps["cache"].put.assert_not_awaited()
+
+
+def test_chat_service_mode_override(tmp_path):
+    """请求级 mode 覆盖：检索/缓存 key 用生效 mode；config 保持原值不被改写"""
+    svc, deps = _chat_svc(tmp_path)
+
+    resp = asyncio.run(svc.process("年假有几天？", None, "vector-only"))
+
+    assert resp.mode == "vector-only"
+    deps["retrieval"].retrieve.assert_awaited_with("年假有几天？", "general", "vector-only")
+    deps["cache"].get.assert_awaited_with("年假有几天？", "vector-only")  # 缓存 key 用生效 mode
+    deps["cache"].put.assert_awaited_once()
+    assert ConfigRegistry.get("retrieval.mode", "") == "hybrid+rerank"   # 全局配置未被污染
 
 
 # ═══ 3. IngestService ═══════════════════════════════════════

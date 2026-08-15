@@ -35,13 +35,14 @@ _TIMEOUT_ANSWER = "请求处理超时，请稍后重试。"
 class ChatResponse:
     answer: str
     session_id: str
-    sources: List[dict] = field(default_factory=list)   # [{"chunk_id","heading_path","score"}]
+    sources: List[dict] = field(default_factory=list)   # [{"chunk_id","heading_path","score","text"}]
     timing_ms: Dict[str, int] = field(default_factory=dict)
     token_usage: Dict[str, int] = field(default_factory=dict)
     refused: bool = False
     refusal_reason: Optional[str] = None
     from_cache: bool = False
     partial: bool = False
+    mode: str = ""                 # 实际生效的检索模式（请求级覆盖或 config 全局值）
 
 
 class ChatService:
@@ -54,10 +55,12 @@ class ChatService:
         self.guard = guard or get_guard_singleton()
         self.compressor = compressor or ConversationCompressor()
 
-    async def process(self, query: str, session_id: str = None) -> ChatResponse:
+    async def process(self, query: str, session_id: str = None,
+                      mode: Optional[str] = None) -> ChatResponse:
+        """问答编排。mode=None → config 全局值；否则请求级覆盖（缓存 key / 检索 / 埋点全用生效值）"""
         t_start = time.perf_counter()
         cache_enabled = bool(ConfigRegistry.get("cache.l1.enabled", True))
-        mode = ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
+        mode = mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
 
         # 1. 缓存（cache.l1.enabled 时）：命中直接返回，不建会话不检索；
         #    命中路径同样写 request_metrics（cache_hit=1），缓存命中率才可计算（I-2 终审）
@@ -93,7 +96,7 @@ class ChatService:
         # 检索不做外层阶段超时：RetrievalService 内部已有检索 3s / 重排 2s 分阶段超时，
         # 且首次 rerank 预热（模型加载 ~3.4s）发生在内部超时之外。
         # 外层 3s 包裹会误杀含预热的首个请求（smoke 实测）；总预算由 API 层 9s 硬超时兜底。
-        retrieval_output = await self.retrieval.retrieve(query, doc_type)
+        retrieval_output = await self.retrieval.retrieve(query, doc_type, mode)
         docs = retrieval_output.docs if retrieval_output else []
         degraded = retrieval_output.degraded if retrieval_output else False
         injection_blocked = retrieval_output.injection_blocked if retrieval_output else 0
@@ -210,6 +213,7 @@ class ChatService:
             answer=answer, session_id=session_id, sources=sources,
             timing_ms=timing, token_usage=tokens, refused=refused,
             refusal_reason=refusal_reason, from_cache=False, partial=partial,
+            mode=mode,
         )
 
     # ── 私有方法（SQLite 持久化）──────────────────────────
@@ -235,6 +239,7 @@ class ChatService:
             refused=cached.refused,
             refusal_reason=cached.refusal_reason,
             from_cache=True,
+            mode=retrieval_mode,   # 缓存命中：模式 = 本次请求生效模式（缓存 key 对应值）
         )
 
     async def _create_session(self) -> str:
