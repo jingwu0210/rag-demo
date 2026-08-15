@@ -1,7 +1,7 @@
 """QA 测试集生成：DeepSeek API 基于语料生成初稿 → 人工 review 后固化。
 
 用法: DEEPSEEK_API_KEY=sk-xxx .venv/bin/python scripts/generate_test_set.py
-输出: assets/testsets/test_set.json（LLM 初稿）；人工修正后覆盖同名文件
+输出: assets/testsets/test_set.json（LLM 初稿，baseline 不带版本）；人工修正后覆盖同名文件
 """
 import asyncio
 import hashlib

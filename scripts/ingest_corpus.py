@@ -33,17 +33,22 @@ from storage.sqlite_client import init_db
 # 元数据映射（filename → doc_type/version/effective_date/doc_group）。
 # 顺序敏感：同 doc_group 的新旧版本须按旧→新排列。
 CORPUS_META = {
-    "employee_handbook_v1.0.pdf": ("handbook", "v1.0", None, "employee_handbook"),
-    "employee_handbook_v1.1.pdf": ("handbook", "v1.1", None, "employee_handbook"),
-    "compliance_guide_cn.pdf": ("compliance", "v2.0", None, None),
-    "compliance_guide_en.pdf": ("compliance", "v2.0", None, None),
-    "api_specification.md": ("technical", "v3.2", None, None),
-    "it_security_policy.pdf": ("technical", "v1.4", None, None),
-    "legacy_tech_manual_v2022.pdf": ("technical", "v1.0", "2022-01-01", None),
-    "architecture_overview.md": ("architecture", "v2.1", None, None),
-    "incident_response_plan.pdf": ("architecture", "v3.0", None, None),
-    "scanned_hr_notice.pdf": ("handbook", "v1.0", None, None),
-    "injection_sample.pdf": ("technical", "v1.0", None, None),  # 安全测试文档（独立存放，防污染正常文档）
+    # 员工手册（同 doc_group → 新版本软下线旧版；版本替换验收载体）
+    "employee-handbook.cn.v2025.pdf": ("handbook", "v2025", None, "employee-handbook.cn"),
+    "employee-handbook.cn.md": ("handbook", "2026.0", None, "employee-handbook.cn"),
+    # 过期文档（effective_date 超期，过期过滤验收载体）
+    "legacy-travel-policy.cn.docx": ("handbook", "v2019", "2019-06-01", None),
+    # PII 测试载体（虚构客户数据，专测 FR-3 脱敏）
+    "customer-records.en.md": ("compliance", "v1.0", None, None),
+    # 注入样本（安全测试文档，独立存放，防污染正常文档）
+    "injection-sample.en.pdf": ("technical", "v1.0", None, None),
+    # 常规文档
+    "compliance-guide.en.md": ("compliance", "2026.0", None, None),
+    "technical-spec.en.md": ("technical", "2026.0", None, None),
+    "api-doc.scan.pdf": ("technical", "v1.0", None, None),
+    "architecture-overview.en.pdf": ("architecture", "2026.0", None, None),
+    "it-security-policy.en.pdf": ("technical", "2026.0", None, None),
+    "incident-response-plan.en.pdf": ("architecture", "2026.0", None, None),
 }
 
 DEFAULT_META = ("handbook", "v1.0", None, None)   # 未映射新文件的默认元数据
@@ -58,22 +63,23 @@ def wipe_safely():
     chroma_dir = ConfigRegistry.get("chromadb.persist_directory", "assets/chroma")
 
     # 1. 备份
-    backup_dir = "data/backup"
+    backup_dir = "workspace/backup"
     os.makedirs(backup_dir, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
     if os.path.exists(sqlite_path):
         shutil.copy2(sqlite_path, os.path.join(backup_dir, f"cache-{ts}.db"))
-        print(f"SQLite 已备份: data/backup/cache-{ts}.db")
+        print(f"SQLite 已备份: workspace/backup/cache-{ts}.db")
 
-    # 2. SQLite 数据表清空（保留表结构）
+    # 2. SQLite 数据表清空（保留表结构；eval_history 不可清 — 铁律 10：
+    #    评估历史是 before/after 对比依据，语料重灌不清评估记录）
     import sqlite3
     conn = sqlite3.connect(sqlite_path)
     for table in ("ingest_log", "cache_entries", "turns", "sessions",
-                  "request_metrics", "eval_history"):
+                  "request_metrics"):
         conn.execute(f"DELETE FROM {table}")
     conn.commit()
     conn.close()
-    print("SQLite 数据表已清空（表结构保留）")
+    print("SQLite 数据表已清空（表结构保留；eval_history 按铁律 10 保留）")
 
     # 3. ChromaDB 集合删除重建
     from storage.chroma_client import ChromaStore
