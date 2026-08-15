@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>运营报表</title>
+<style>
+  :root {
+    --ground: #f5f6f8; --surface: #ffffff; --ink: #1a1f2a; --muted: #5b6675;
+    --faint: #8b94a3; --border: #e2e6ec; --accent: #2f4e7a; --accent-soft: #e8eef6;
+    --chat: #2f4e7a; --chat-soft: #e8eef6; --eval: #1e7b4e; --eval-soft: #e9f3ee;
+    --warn: #b4452a; --mono-bg: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0e1116; --surface: #151a22; --ink: #e8ecf2; --muted: #8a96a6;
+      --faint: #6b7686; --border: #2a323e; --accent: #6b92c9; --accent-soft: #1c2634;
+      --chat: #6b92c9; --chat-soft: #1c2634; --eval: #4caf7d; --eval-soft: #17251d;
+      --warn: #e07b5a; --mono-bg: #12161c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e1116; --surface: #151a22; --ink: #e8ecf2; --muted: #8a96a6;
+    --faint: #6b7686; --border: #2a323e; --accent: #6b92c9; --accent-soft: #1c2634;
+    --chat: #6b92c9; --chat-soft: #1c2634; --eval: #4caf7d; --eval-soft: #17251d;
+    --warn: #e07b5a; --mono-bg: #12161c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px 72px; }
+
+  header.hero { margin-bottom: 36px; }
+  .eyebrow { font: 600 12px/1.4 system-ui, sans-serif; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+  h1 { font: 700 32px/1.2 system-ui, -apple-system, sans-serif; letter-spacing: -0.01em; margin: 0 0 12px; }
+  .lede { color: var(--muted); font-size: 17px; max-width: 64ch; margin: 0; }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 28px 0 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .stat .k { display: block; font-size: 12px; color: var(--faint); letter-spacing: 0.05em; text-transform: uppercase; }
+  .stat .v { display: block; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .stat .d { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 26px 28px; margin-top: 20px; }
+  h2 { font: 650 19px/1.3 system-ui, -apple-system, sans-serif; margin: 0 0 16px; letter-spacing: -0.005em; }
+
+  .src-badge { display: inline-flex; align-items: center; gap: 6px; font: 600 12px/1 system-ui, sans-serif; padding: 4px 10px; border-radius: 999px; }
+  .src-badge.chat { background: var(--chat-soft); color: var(--chat); }
+  .src-badge.eval { background: var(--eval-soft); color: var(--eval); }
+
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+  td { font-size: 14.5px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; }
+  td.best { color: var(--eval); font-weight: 700; }
+
+  .obs { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 12px; }
+  .obs li { padding: 14px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; }
+  .obs li.warn { border-left-color: var(--warn); background: transparent; border: 1px solid var(--border); }
+  .obs b { color: var(--ink); }
+
+  .foot { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--faint); font-size: 14px; }
+  .foot code { font: 13px ui-monospace, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">RAG QA Service · 运营</p>
+    <h1>运营报表</h1>
+    <p class="lede">基于 <code>request_metrics</code> 表（1529 条请求）按来源分组聚合：chat 为用户对话、eval 为评估跑批。覆盖时间 2026-08-15 09:31 ~ 18:30。</p>
+    <div class="stat-grid">
+      <div class="stat"><span class="k">chat 请求</span><span class="v">475</span><span class="d">缓存命中 12.84% · 拒答 14.53%</span></div>
+      <div class="stat"><span class="k">eval 请求</span><span class="v">1054</span><span class="d">缓存命中 0.95% · 拒答 13.19%</span></div>
+      <div class="stat"><span class="k">chat P95</span><span class="v">6002<span style="font-size:16px">ms</span></span><span class="d">P50 2281ms</span></div>
+      <div class="stat"><span class="k">eval P95</span><span class="v">6323<span style="font-size:16px">ms</span></span><span class="d">P50 2167ms</span></div>
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>核心指标</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>来源</th><th class="num">请求数</th><th class="num">P50</th><th class="num">P95</th><th class="num">平均 Token</th><th class="num">缓存命中率</th><th class="num">拒答率</th><th class="num">PII 脱敏</th><th class="num">注入拦截</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="src-badge chat">chat</span></td><td class="num">475</td><td class="num">2281</td><td class="num">6002</td><td class="num">2222.1</td><td class="num best">12.84%</td><td class="num">14.53%</td><td class="num">12</td><td class="num">12</td></tr>
+          <tr><td><span class="src-badge eval">eval</span></td><td class="num">1054</td><td class="num">2167</td><td class="num">6323</td><td class="num">2552.3</td><td class="num">0.95%</td><td class="num">13.19%</td><td class="num">46</td><td class="num">32</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>检索模式分布</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>来源</th><th class="num">vector-only</th><th class="num">hybrid</th><th class="num">hybrid+rerank</th></tr></thead>
+        <tbody>
+          <tr><td><span class="src-badge chat">chat</span></td><td class="num">121</td><td class="num">126</td><td class="num">228</td></tr>
+          <tr><td><span class="src-badge eval">eval</span></td><td class="num">394</td><td class="num">330</td><td class="num">330</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>运维观察</h2>
+    <ul class="obs">
+      <li><b>chat 缓存命中率（12.84%）远高于 eval（0.95%）</b> —— 符合预期：eval 链路按设计做了缓存隔离（R8 修复项），确保评估不污染生产缓存；chat 侧自然流量有真实复用。</li>
+      <li><b>拒答率两分组均约 13-15%</b> —— chat（14.53%）略高于 eval（13.19%），属同一量级；如需进一步归因可结合 refusal_reason 分布分析。</li>
+      <li class="warn"><b>P95 延迟（6002 / 6323ms）明显高于 P50（2281 / 2167ms）</b> —— 长尾明显，结合 timeout（44 次）、degraded（39 次）记录，重模型加载与慢生成是长尾主因。</li>
+      <li><b>千次调用 Token 成本（R9 实测，per-config）</b> —— vector-only ¥3.15 / hybrid ¥2.52 / hybrid+rerank ¥2.53，详见 <code>evaluation-report.md §2.1</code>（本报表 <code>avg_tokens</code> 为运行时聚合、无 prompt/completion 拆分，故引用评估报表的按配置估算）。</li>
+    </ul>
+  </div>
+
+  <footer class="foot">
+    <p>数据来源：<code>workspace/cache.db</code> 的 <code>request_metrics</code> 表（1529 行）。配套 CSV：<code>operations-report.csv</code>（9 列与上表一致）。</p>
+  </footer>
+
+</div>
+</body>
+</html>

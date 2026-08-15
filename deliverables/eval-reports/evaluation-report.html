@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>评估报告</title>
+<style>
+  :root {
+    --ground: #f5f6f8; --surface: #ffffff; --ink: #1a1f2a; --muted: #5b6675;
+    --faint: #8b94a3; --border: #e2e6ec; --accent: #2f4e7a; --accent-soft: #e8eef6;
+    --fix: #1e7b4e; --fix-soft: #e9f3ee; --problem: #b4452a; --problem-soft: #f7ece7;
+    --mono-bg: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0e1116; --surface: #151a22; --ink: #e8ecf2; --muted: #8a96a6;
+      --faint: #6b7686; --border: #2a323e; --accent: #6b92c9; --accent-soft: #1c2634;
+      --fix: #4caf7d; --fix-soft: #17251d; --problem: #e07b5a; --problem-soft: #2a1d18;
+      --mono-bg: #12161c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e1116; --surface: #151a22; --ink: #e8ecf2; --muted: #8a96a6;
+    --faint: #6b7686; --border: #2a323e; --accent: #6b92c9; --accent-soft: #1c2634;
+    --fix: #4caf7d; --fix-soft: #17251d; --problem: #e07b5a; --problem-soft: #2a1d18;
+    --mono-bg: #12161c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px 72px; }
+
+  header.hero { margin-bottom: 36px; }
+  .eyebrow { font: 600 12px/1.4 system-ui, sans-serif; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+  h1 { font: 700 32px/1.2 system-ui, -apple-system, sans-serif; letter-spacing: -0.01em; margin: 0 0 12px; text-wrap: balance; }
+  .lede { color: var(--muted); font-size: 17px; max-width: 68ch; margin: 0; }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 28px 0 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .stat .k { display: block; font-size: 12px; color: var(--faint); letter-spacing: 0.05em; text-transform: uppercase; }
+  .stat .v { display: block; font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .stat .v.pass { color: var(--fix); }
+
+  .phase { display: inline-block; font: 600 12px/1 system-ui, sans-serif; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin: 32px 0 0; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 26px 28px; margin-top: 16px; }
+  h2 { font: 650 20px/1.3 system-ui, -apple-system, sans-serif; margin: 0 0 6px; letter-spacing: -0.005em; }
+  .sub { color: var(--muted); font-size: 14.5px; margin: 0 0 18px; }
+
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; text-align: left; padding: 9px 12px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+  td { font-size: 14px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; }
+  td.best { font-weight: 700; color: var(--accent); }
+
+  .check { color: var(--fix); font-weight: 700; }
+
+  .delta-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+  .ba { display: inline-flex; align-items: baseline; gap: 7px; background: var(--fix-soft); border-radius: 8px; padding: 9px 13px; }
+  .ba .lbl { font-size: 12.5px; color: var(--muted); }
+  .ba .num { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ba.before .num { color: var(--problem); }
+  .ba.after .num { color: var(--fix); }
+  .arrow { color: var(--faint); font-weight: 700; align-self: center; }
+  .delta { align-self: center; font: 600 13px/1 system-ui, sans-serif; color: var(--fix); }
+
+  .concl { margin: 16px 0 0; padding: 14px 16px; background: var(--accent-soft); border-radius: 8px; border-left: 3px solid var(--accent); }
+  .concl p { margin: 6px 0; }
+  .concl b { color: var(--ink); }
+
+  .foot { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--faint); font-size: 14px; }
+  .foot code { font: 13px ui-monospace, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">RAG QA Service · 评估</p>
+    <h1>评估报告</h1>
+    <p class="lede">R6→R9 两轮修复的 before/after 对比。同一 110 条测试集，三检索配置逐指标核对目标值，最终轮 R9 五指标全部达标。</p>
+    <div class="stat-grid">
+      <div class="stat"><span class="k">Faithfulness</span><span class="v pass">0.93–0.94</span></div>
+      <div class="stat"><span class="k">Context Precision</span><span class="v pass">0.77–0.81</span></div>
+      <div class="stat"><span class="k">Compliance</span><span class="v pass">0.91–0.95</span></div>
+      <div class="stat"><span class="k">Refusal</span><span class="v pass">0.9909</span></div>
+      <div class="stat"><span class="k">Style</span><span class="v pass">0.89</span></div>
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>最终轮 R9 · 三配置对比</h2>
+    <p class="sub">run_id=eval_20260816_022054_4243d245，110 条 baseline，五指标逐项对照目标值。</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Config</th><th class="num">Faith<br>(≥0.85)</th><th class="num">CP<br>(≥0.70)</th><th class="num">Compliance<br>(≥0.80)</th><th class="num">Refusal<br>(≥0.80)</th><th class="num">Style<br>(≥0.85)</th><th class="num">P50</th><th class="num">P95</th><th class="num">¥/千次</th></tr></thead>
+        <tbody>
+          <tr><td>vector-only</td><td class="num best">0.9414</td><td class="num best">0.8138</td><td class="num">0.9067</td><td class="num">0.9909</td><td class="num">0.8896</td><td class="num">1279</td><td class="num">2619</td><td class="num">3.15</td></tr>
+          <tr><td>hybrid</td><td class="num">0.9289</td><td class="num">0.7748</td><td class="num best">0.9465</td><td class="num">0.9909</td><td class="num best">0.8917</td><td class="num best">1157</td><td class="num best">2562</td><td class="num best">2.52</td></tr>
+          <tr><td>hybrid+rerank</td><td class="num">0.9393</td><td class="num">0.7978</td><td class="num">0.9070</td><td class="num">0.9909</td><td class="num">0.8875</td><td class="num">3303</td><td class="num">5636</td><td class="num">2.53</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="concl">
+      <p><b>五指标全部达标</b>：Faithfulness / CP / Compliance / Refusal / Style 三配置逐项 ✅，无一处跌破目标值。</p>
+      <p><b>选型建议</b>：<code>hybrid</code> 综合最优（Compliance 最高、延迟与 token 最低）；<code>vector-only</code> 检索精度最高（CP / Faith 双第一）；<code>hybrid+rerank</code> 在本语料（252 chunks）增益有限、P95 约 2.2×，建议语料扩容后再启用。</p>
+      <p><b>千次成本</b>：<code>hybrid</code> ¥2.52 / 千次最低；<code>vector-only</code> ¥3.15；<code>hybrid+rerank</code> ¥2.53（R9 实测 token 均值 × 单价 ¥1.00 入 / ¥2.00 出 / 百万 tokens，见设计文档 §7.5）。</p>
+    </div>
+  </div>
+
+  <p class="phase">before/after 对比 · 两条修复链</p>
+
+  <div class="card">
+    <h2>R6→R7 检索质量修复链</h2>
+    <p class="sub">F1 空格 PDF 根治 + F2 OOS 口径 + F3 PII pattern + F4 judge 盲区 + max_chunks 10 + expire 开启。</p>
+    <div class="delta-strip">
+      <span class="ba before"><span class="lbl">Context Precision</span><span class="num">0.644–0.662</span></span>
+      <span class="arrow">→</span>
+      <span class="ba after"><span class="lbl">Context Precision</span><span class="num">0.756–0.770</span></span>
+      <span class="delta">+10.7~11.4pp</span>
+    </div>
+    <div class="delta-strip">
+      <span class="ba before"><span class="lbl">Answer Compliance</span><span class="num">0.649–0.687</span></span>
+      <span class="arrow">→</span>
+      <span class="ba after"><span class="lbl">Answer Compliance</span><span class="num">0.900–0.952</span></span>
+      <span class="delta">+23.0~26.5pp</span>
+    </div>
+    <div class="concl">
+      <p>CP 三配置 +10.7~11.4pp、Compliance +23.0~26.5pp，均 ≥10%。核心是 F1 块级双字体渲染根治了"空格 PDF 召回失败"（16 题×3 配置 CP=0，占 CP 损失 50.8%），清零后 CP 恢复正常。</p>
+      <p>代价：P95 上升约 300-600ms（max_chunks 10 增加上下文量），属"用延迟换召回完整性"的已接受权衡。</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>R7→R9 数据失真修复链</h2>
+    <p class="sub">judge/generator/Ragas 关思考 + 300 字符截断 + timeout 7s + OOS 关键词/注入检测 + 缓存隔离 + 超时语义 + OOS 软拒 judge。</p>
+    <div class="delta-strip">
+      <span class="ba before"><span class="lbl">Refusal Appropriateness</span><span class="num">0.8545–0.8636</span></span>
+      <span class="arrow">→</span>
+      <span class="ba after"><span class="lbl">Refusal Appropriateness</span><span class="num">0.9909</span></span>
+      <span class="delta">+12.7~13.6pp</span>
+    </div>
+    <div class="delta-strip">
+      <span class="ba before"><span class="lbl">OOS 拒答率</span><span class="num">0.7222</span></span>
+      <span class="arrow">→</span>
+      <span class="ba after"><span class="lbl">OOS 拒答率</span><span class="num">1.0</span></span>
+      <span class="delta">+27.8pp（相对 +38.5%）</span>
+    </div>
+    <div class="delta-strip">
+      <span class="ba before"><span class="lbl">阶段超时（三配置）</span><span class="num">19 / 12 / 8</span></span>
+      <span class="arrow">→</span>
+      <span class="ba after"><span class="lbl">阶段超时（三配置）</span><span class="num">0 / 0 / 0</span></span>
+      <span class="delta">清零</span>
+    </div>
+    <div class="concl">
+      <p>Refusal 三配置 +12.7~13.6pp（≥10%）：300 字符截断 + timeout 7s 消除 rerank 超时，hybrid+rerank 误拒 45 条 → 14 条；超时样本从 Refusal 计算中排除；OOS 软拒 judge 将"软拒答"计入正确。</p>
+      <p>Compliance 由"恒 1.0 假象"恢复真实（0.90-0.95）：关思考后 judge 不再被思考链吃满 max_tokens，指标出现真实区分度。</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>残余问题与后续建议</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>残余问题</th><th>证据</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>同文档内精细条款排序靠后</td><td>答案条款在长文档内部排不进 top7</td><td>⏳ 待修（P1h 权重调优）</td></tr>
+          <tr><td>PII 取值题 judge 判定偏差</td><td>5 条 PII 题检索全中仍 CP=0</td><td>⏳ 待修（评估层口径）</td></tr>
+          <tr><td>短文档跨文档压制残量</td><td>低分组含短文档 59% vs 高分组 26%</td><td>⏳ 待修（P1g 或接受）</td></tr>
+          <tr><td>hybrid+rerank P95 5636ms</td><td>CrossEncoder 在 MPS 上串行推理固有成本</td><td>📝 语料扩容后复测</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <p>数据来源：<code>deliverables/eval-reports/eval-history.md</code>（R6-R9 归档）、<code>workspace/results/eval_report-*.md</code>（原始报表）。Issue Diagnosis 见 <code>deliverables/diagnosis/issue-diagnosis.md</code>。模型代际注记：R1-R7 为 deepseek-chat，R8 起为 deepseek-v4-flash（显式关思考）。</p>
+  </footer>
+
+</div>
+</body>
+</html>
