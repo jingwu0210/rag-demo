@@ -394,9 +394,18 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
         _ensure_ragas_llm()  # 预配置 judge（一次性）
         sem = asyncio.Semaphore(concurrency)
 
+        # eval.sh 进度条埋点：每完成 10 条（或最后一条）打 eval_progress 事件
+        progress = {"done": 0}
+        total_qa = len(test_set)
+
         async def _one(item):
             async with sem:
-                return await _evaluate_qa_async(chat_service, item)
+                result = await _evaluate_qa_async(chat_service, item)
+                progress["done"] += 1
+                if progress["done"] % 10 == 0 or progress["done"] == total_qa:
+                    logger.info("eval_progress", config=mode,
+                                done=progress["done"], total=total_qa)
+                return result
 
         qa_results = asyncio.run(
             asyncio.gather(*[_one(i) for i in test_set]))

@@ -54,6 +54,34 @@ CORPUS_META = {
 DEFAULT_META = ("handbook", "v1.0", None, None)   # 未映射新文件的默认元数据
 
 
+def setup_ingest_logfile():
+    """ingest 输出双写：保持 stdout 打印（run.sh 引导时仍可见）+ 落盘 ingest-<时间戳>.log。
+
+    脚本被 run.sh 调用（引导时管道 grep 过滤 stdout），重定向必须在脚本内做——
+    不能靠 run.sh 的 > 重定向（会丢掉 stdout）。用 tee 方案：所有 print 原样进 stdout，
+    同时写一份到 workspace/logs/ingest-<时间戳>.log（前端 Logs 页切 Ingest 时按 ingest-* 前缀可见）。
+    """
+    logs_dir = ConfigRegistry.get("paths.logs", "workspace/logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    path = os.path.join(logs_dir, f"ingest-{ts}.log")
+    f = open(path, "w", encoding="utf-8")
+    orig = sys.stdout
+
+    class _Tee:
+        def write(self, s):
+            orig.write(s)
+            f.write(s)
+
+        def flush(self):
+            orig.flush()
+            f.flush()
+
+    sys.stdout = _Tee()
+    print(f"ingest 输出同时写入: {path}")
+    return path
+
+
 def wipe_safely():
     """安全 wipe（铁律 10）：备份 → SQLite 表 DELETE → ChromaDB 集合删除重建。
 
@@ -134,6 +162,7 @@ def main():
 
     ConfigRegistry.init("config.yaml")
     setup_logging()
+    setup_ingest_logfile()          # 双写：stdout + workspace/logs/ingest-<时间戳>.log
     asyncio.run(init_db())
 
     if args.wipe:
