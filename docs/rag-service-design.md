@@ -94,6 +94,7 @@
 | v1.11 | 2026-08-15 | P1h 双通道 RRF 二次融合（修复 rerank 排序失真）：rerank 后 final = 1/(k+粗排位次) + 1/(k+rerank位次)，精排不独裁（rrf_k 与粗排融合共用 retrieval.fusion.rrf_k）；Reranker.rerank 增加 top_n 参数（不传=config 截断 / 显式 None=全量供融合取位次 / N=截断）；依据 R4 失真证据（API Spec -78%、休假制度 -49%、通用章节 +36%），见 §4.4 |
 | v1.12 | 2026-08-15 | P2 hybrid 融合噪声过滤：RRF 加权（vector_weight 1.0 / bm25_weight 0.8 软降权）+ 融合后 vec_sim ≥ 0.45 硬过滤（纯 BM25 命中视为 0 被滤，过滤在 AdaptiveK 之前，rerank 粗排池同样受益；vector_top1_sim 旁路语义不变）。实测依据：术语类 17 条答案依据 chunk 余弦全部 ≥0.4781 零误杀（铁律 6 验证），见 §4.3 ①.1 |
 | v1.13 | 2026-08-15 | P4 分层指标报表（oos_refusal_rate / normal_refusal_rate / 未作答三类分解，CSV 15→17 列）；测试集 v2（80 条 = 原 65 条 + 三类区分度样本 15 条，多义词类语料不支持不硬造）；发现 R4 时 chroma HNSW 索引未完整落盘（与元数据不同步，挂账观察） |
+| v1.14 | 2026-08-15 | 一键交付契约：唯一外部依赖 = DeepSeek API Key。run.sh/eval.sh 增加 key 前置检查（缺失明确报错）、HF_ENDPOINT/PIP_INDEX_URL 镜像兜底（默认国内镜像、环境变量可 override）、eval.sh 增加 venv/知识库前置检查；测试集默认切换 v2；日志 JSONRenderer ensure_ascii=False（中文直接可读，与字段字典样例一致）；R5 实测闭环 max_workers 5 的 MPS 无退化假设 |
 
 ---
 
@@ -1227,7 +1228,7 @@ Cross-Encoder 精排模块，对粗排候选做逐对打分。在 `config.rerank
 | 输入截断 200 字符 | 全文推理 2248ms 超 2s 阶段预算 → 评估日志大量 rerank_degraded；截断后 ~816ms（30 候选）。黄金信号在 chunk 开头（heading_path 前缀） |
 | 候选池 = top_k(20) × candidates_multiplier(1.5) = 30 | 60 候选（×3）推理 ~1.8s 贴死 2s 超时 → 频繁降级；30 候选留 1.1s 余量 |
 | 模型加载互斥锁（R8） | R4 评估并发 5 首触：无锁时 3 线程同时加载 CrossEncoder 到 MPS，设备初始化竞争使加载从 ~3.4s 爆炸到 ~47.8s（5 样本降级）；`threading.Lock` double-checked 串行化加载 |
-| max_workers = 5（R8） | 容量模型：最坏延迟 = ceil(并发/worker) × T(816ms) ≤ 2s 预算 → 5 并发 1 轮 0.82s、10 并发 2 轮 1.63s。注：5 路 MPS 并发推理无放大未经实测，若退化 >1.6s/次应回退 4 |
+| max_workers = 5（R8） | 容量模型：最坏延迟 = ceil(并发/worker) × T ≤ 2s 预算 → 5 并发 1 轮 0.82s、10 并发 2 轮 1.63s。**R5 实测验证（铁律 6 闭环）**：5 并发稳态 rerank P50=490ms / P95=1716ms，0 降级，无 MPS 放大退化（对比 R4 的 3 worker：P50=812 / P95=2001） |
 | 预热排除在阶段超时外 | 首次加载 ~3.4s > 2s 预算，warmup 由独立 wait_for(180) 保护；锁修后并发首触只加载一次 |
 | 启动预热（B 方案，v1.8） | 模型加载挪到计时外：API startup 预热 reranker（独立 try/except，失败 warning 不崩，运行时仍有降级兜底）；评估 runner 切到 hybrid+rerank 配置后、QA 计时前预热一次。效果：首请求/全部评估样本的延迟不含 ~5.5s 加载税 |
 | 二次 RRF 融合（P1h，v1.11） | R4 评估排序失真：CrossEncoder 把细粒度相关文档挤出 top_n=5（API Spec -78%、休假制度 -49%、通用章节"员工行为规范"+36%），Faith/CP 最低。修复：精排不独裁 — final = 1/(60+粗排位次) + 1/(60+rerank位次)，两信号各投一票；rerank 改全量排序取位次（top_n=None），按 final 降序截 top_n；rrf_k 与粗排融合共用 retrieval.fusion.rrf_k（config 单源） |
@@ -2284,7 +2285,7 @@ pii_redact_total, injection_blocked_total
 
 - **计算公式**：`Refusal Appropriateness = 正确处理样本数 / 总测试样本数`
 - **评测集要求**：混入 20% out-of-scope 问题 + 三类区分度样本（v1.4 测试集 65 条含 12 条 OOS）：
-- **测试集 v2（v1.13，80 条）**：`data/eval/test_set_v2.json` = 原 65 条逐字节保留 + 15 条新增三类区分度样本（多数字条款 5 / 中英混合 5 / 长复杂政策 5）。多义词类经语料盘点**不支持**（语料无真正双义实例，不硬造——避免无法回答样本）。切换方式：override `eval.test_set_path` 指向 v2；before/after 对比因 test_set_hash 变化，按 65 条公共问题子集（per_qa question 交集）重算，对比口径在 eval-history 注明：
+- **测试集 v2（v1.13，80 条）**：`data/eval/test_set_v2.json` = 原 65 条逐字节保留 + 15 条新增三类区分度样本（多数字条款 5 / 中英混合 5 / 长复杂政策 5）。多义词类经语料盘点**不支持**（语料无真正双义实例，不硬造——避免无法回答样本）。**v2 为默认测试集**（config `eval.test_set_path` 指向 v2）；回退 v1 用 override；before/after 对比因 test_set_hash 变化，按 65 条公共问题子集（per_qa question 交集）重算，对比口径在 eval-history 注明：
   - **精确术语类**（ISO 27001/429/SEV-1 等）— 发挥 BM25 优势，否则测试集对 hybrid 不公平
   - **复杂多跳类**（需多 chunk 拼合）— 让 Faithfulness 对检索完整性敏感
   - **边界模糊类**（关键词误伤/safety 边界/半相关）— 让 Refusal 指标有区分度
@@ -2333,7 +2334,7 @@ pii_redact_total, injection_blocked_total
 ```python
 # eval/runner.py
 def run_comparison():
-    test_set = load_test_set(ConfigRegistry.get("eval.test_set_path"))  # 65 条（v1.4 起）
+    test_set = load_test_set(ConfigRegistry.get("eval.test_set_path"))  # v1.13 起默认 v2（80 条）
     configs = ConfigRegistry.get("eval.compare_configs")
     
     results = {}
@@ -2369,19 +2370,20 @@ def run_comparison():
 
 #### 一键评测脚本 (eval.sh)
 
+一键交付承诺（v1.14）：**唯一外部依赖 = DeepSeek API Key**，其余全自举。run.sh / eval.sh 共同的前置检查与镜像兜底：
+
+- **key 检查**：`DEEPSEEK_API_KEY` 缺失 → 明确报错退出（含用法提示）
+- **环境自举**：eval.sh 检查 venv 与知识库（active chunks）非空，缺一即提示"先运行 ./run.sh"
+- **镜像兜底**：`HF_ENDPOINT` 默认 `https://hf-mirror.com`、`PIP_INDEX_URL` 默认清华源，已设环境变量则尊重用户配置（海外环境可 override 官方源）
+- **日志分流**：每次评估独立时间戳日志（stdout=结构化 JSON / stderr=第三方噪音分流）
+
 ```bash
 #!/bin/bash
-# eval.sh — 一键评估脚本
-
-echo "=== RAG 评估开始 ==="
-echo "测试配置: vector-only / hybrid / hybrid+rerank"
-
-# 运行评估
-python -m eval.runner --output data/eval/results/
-
-echo "=== 评估完成 ==="
-echo "结果文件: data/eval/results/report.csv"
-echo "详细日志: data/logs/eval-*.json"
+set -e
+# 前置检查：key → venv/知识库 → HF 镜像兜底 → 运行评估
+# 实际实现以仓库 eval.sh 为准（上文为行为契约摘要）
+.venv/bin/python -m eval.runner --output data/eval/results/ \
+    > "data/logs/eval-$(date +%Y%m%d_%H%M%S).log" 2> ...stderr.log
 ```
 
 #### Bad Case 自动采集
