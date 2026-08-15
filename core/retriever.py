@@ -274,9 +274,11 @@ class Retriever:
 
     def retrieve(self, query: str, top_k: int = 20,
                  doc_type_filter: Optional[str] = None,
-                 skip_adaptive: bool = False) -> RetrievalResult:
+                 skip_adaptive: bool = False,
+                 mode: Optional[str] = None) -> RetrievalResult:
+        """mode=None → config 全局值（eval 三配置切换依赖）；否则请求级覆盖（/chat 透传）。"""
         start = time.perf_counter()
-        mode = ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
+        mode = mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
         impl = self._get_impl(mode)
         if skip_adaptive and isinstance(impl, HybridRetriever):
             # R7: rerank 候选池独立 — 粗排结果不截断，完整候选留给 reranker 精排

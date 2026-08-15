@@ -11,11 +11,15 @@ from pydantic import BaseModel
 class ChatRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
+    # 请求级检索模式（vector-only | hybrid | hybrid+rerank）；None = 用 config 全局值
+    mode: Optional[str] = None
 
 
 class ChatResponseSchema(BaseModel):
     answer: str
     session_id: str = ""
+    # 实际使用的检索模式（请求级覆盖生效后的值；超时降级路径用请求生效值）
+    mode: str = ""
     sources: List[Dict[str, Any]] = []
     timing_ms: Dict[str, int] = {}
     token_usage: Dict[str, int] = {}

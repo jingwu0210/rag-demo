@@ -12,15 +12,17 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import json
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
 import structlog
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from core.bilingual import BilingualHandler
@@ -73,21 +75,25 @@ async def _history_turns(session_id: Optional[str]) -> int:
         return 0
 
 
-def _chat_response_from(result, session_id: str) -> ChatResponseSchema:
+def _chat_response_from(result, session_id: str, mode: str = "") -> ChatResponseSchema:
     """统一转换：ChatResponse dataclass 或超时 dict（guard.with_request_timeout 返回）
 
     注意：缓存命中时 ChatResponse.session_id 可能为 None → 归一为空串，
     与 schema 的 str 契约保持一致（"" 表示未建立会话）。
+    mode：dataclass 路径取 result.mode（服务端实际生效值）；
+    超时 dict 路径取调用方传入的请求生效模式（process 未返回，无法得知更精确值）。
     """
     if isinstance(result, dict):
         return ChatResponseSchema(
             answer=result.get("answer", _TIMEOUT_ANSWER),
             session_id=session_id or "",
+            mode=mode,
             partial=bool(result.get("partial", False)),
         )
     return ChatResponseSchema(
         answer=result.answer,
         session_id=result.session_id or "",
+        mode=getattr(result, "mode", "") or "",
         sources=list(result.sources or []),
         timing_ms=dict(result.timing_ms or {}),
         token_usage=dict(result.token_usage or {}),
@@ -100,13 +106,23 @@ def _chat_response_from(result, session_id: str) -> ChatResponseSchema:
 
 # ── 1. /chat ────────────────────────────────────────────────
 
+_CHAT_MODES = ("vector-only", "hybrid", "hybrid+rerank")
+
+
 @router.post("/chat", response_model=ChatResponseSchema)
 async def chat(req: ChatRequest, request: Request):
-    """问答主入口：限流（429）→ 会话校验（M-3）→ 硬超时执行"""
+    """问答主入口：限流（429）→ 会话校验（M-3）→ 硬超时执行
+
+    mode（可选）：vector-only | hybrid | hybrid+rerank；缺省 → config 全局值。
+    """
     chat_service = request.app.state.chat_service
     guard = request.app.state.guard
     request_id = uuid.uuid4().hex
     structlog.contextvars.bind_contextvars(request_id=request_id)
+    if req.mode is not None and req.mode not in _CHAT_MODES:
+        raise HTTPException(status_code=422, detail=f"未知检索模式：{req.mode}")
+    # 请求生效模式：请求级覆盖或 config 全局值（超时 dict 路径的响应 mode 用此值）
+    effective_mode = req.mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
     # L2 埋点: chat_request_start（query 截断 200 + 语言 + doc_type + 历史轮数）
     logger.info("chat_request_start",
                 request={"id": request_id, "session_id": req.session_id},
@@ -136,9 +152,9 @@ async def chat(req: ChatRequest, request: Request):
             session_id = await chat_service._create_session()
 
         result = await guard.with_request_timeout(
-            chat_service.process(req.query, session_id))
+            chat_service.process(req.query, session_id, req.mode))
 
-    resp = _chat_response_from(result, session_id)
+    resp = _chat_response_from(result, session_id, effective_mode)
     # L2 埋点: chat_request_end（summary 组：一次请求完整画像）
     logger.info("chat_request_end",
                 request={"id": request_id, "session_id": resp.session_id},
@@ -256,13 +272,43 @@ async def _fetch_eval_history(run_id: Optional[str]) -> List[dict]:
         await db.close()
 
 
+async def _fetch_eval_per_qa(run_id: str) -> dict:
+    """解析该 run 的 per_qa_results_json → {config_name: [per_qa 条目, ...]}。
+
+    per_qa_results_json 为 runner 写入的 JSON 数组字符串；解析失败/空 → []。
+    """
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT config_name, per_qa_results_json FROM eval_history WHERE run_id = ?",
+            (run_id,))
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+    out: dict = {}
+    for r in rows:
+        raw = r["per_qa_results_json"]
+        try:
+            parsed = json.loads(raw) if raw else []
+            out[r["config_name"]] = parsed if isinstance(parsed, list) else []
+        except (TypeError, ValueError):
+            out[r["config_name"]] = []
+    return out
+
+
 @router.get("/eval/result")
-async def eval_result(run_id: Optional[str] = None):
-    """查询评估结果：按 run_id 返回该 run 各 config 的指标 JSON；无 run_id → 最近一次"""
+async def eval_result(run_id: Optional[str] = None, detail: bool = False):
+    """查询评估结果：按 run_id 返回该 run 各 config 的指标 JSON；无 run_id → 最近一次。
+
+    detail=true → 追加 per_qa 键：{config_name: [逐条明细, ...]}（解析 per_qa_results_json）。
+    """
     rows = await _fetch_eval_history(run_id)
     if not rows:
         return JSONResponse(content={"run_id": run_id or None, "results": []})
-    return JSONResponse(content={"run_id": rows[0]["run_id"], "results": rows})
+    body: dict = {"run_id": rows[0]["run_id"], "results": rows}
+    if detail:
+        body["per_qa"] = await _fetch_eval_per_qa(rows[0]["run_id"])
+    return JSONResponse(content=body)
 
 
 async def _fetch_request_metrics() -> List[dict]:
@@ -370,3 +416,118 @@ async def health(request: Request):
         status=status, components=components,
         concurrency={"active": active, "max": max_requests},
     )
+
+
+# ── 7. /config + 演示 UI ─────────────────────────────────
+
+@router.get("/config")
+async def get_config():
+    """配置查看：返回 config.yaml 解析后的 dict（含 RAG_ 环境变量覆盖）。
+
+    演示服务无鉴权，全量返回；演示 UI 的 Config 页渲染为分组折叠的 YAML 树。
+    """
+    registry = ConfigRegistry._instance
+    if registry is None:
+        registry = ConfigRegistry.init("config.yaml")
+    return JSONResponse(content=registry._data)
+
+
+_DEMO_UI = Path(__file__).resolve().parent / "static" / "rag-gen-ai-service-demo.html"
+
+
+@router.get("/rag-gen-ai-service-demo")
+async def demo_ui():
+    """演示 UI：无框架单文件工作台（Chat / Ingest / Eval / Report / Maintenance / Config）"""
+    if not _DEMO_UI.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="演示 UI 文件缺失：api/static/rag-gen-ai-service-demo.html")
+    return FileResponse(_DEMO_UI, media_type="text/html")
+
+
+# ── 8. 日志查看（演示 UI Maintenance > Logs）─────────────
+
+def _logs_dir() -> Path:
+    return Path(ConfigRegistry.get("paths.logs", "workspace/logs"))
+
+
+def _tail_log(path: Path, n: int) -> List[str]:
+    """读取文件末尾 n 行（splitlines 去行尾换行，无效 UTF-8 用替换符兜底）"""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read().splitlines()[-n:]
+
+
+@router.get("/logs")
+async def logs(file: Optional[str] = None, lines: int = 200):
+    """日志查看：无参 → {files, default}（*.log 排除 *.stderr.log，default=最新）；
+    ?file=<name>&lines=N → {file, lines, content}（N 上限 1000）。
+    安全：文件名拒绝 / \\ .. 与隐藏文件（防路径穿越）；文件不存在 → 404。"""
+    log_dir = _logs_dir()
+    if file is None:
+        files = sorted(
+            (p.name for p in log_dir.glob("*.log")
+             if not p.name.endswith(".stderr.log")),
+            key=lambda n: log_dir.joinpath(n).stat().st_mtime,
+            reverse=True)
+        return {"files": files, "default": files[0] if files else ""}
+    if ("/" in file or "\\" in file or ".." in file
+            or file.startswith(".") or not file.endswith(".log")):
+        raise HTTPException(status_code=404, detail=f"日志文件不存在：{file}")
+    path = log_dir / file
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"日志文件不存在：{file}")
+    max_lines = min(max(lines, 1), 1000)
+    content = _tail_log(path, max_lines)
+    return {"file": file, "lines": len(content), "content": "\n".join(content)}
+
+
+# ── 9. 数据库浏览（演示 UI Maintenance > DB）──────────────
+
+# 表名白名单：仅六张业务表可浏览，杜绝任意表名注入
+_DB_TABLES = ("cache_entries", "eval_history", "request_metrics",
+              "turns", "sessions", "ingest_log")
+_MAX_DB_ROWS = 200
+_MAX_CELL_CHARS = 500
+
+
+def _truncate_cell(v):
+    """字段截断：字符串超 500 字符 → 前 500 字符（响应体积与前端渲染保护）"""
+    if isinstance(v, str) and len(v) > _MAX_CELL_CHARS:
+        return v[:_MAX_CELL_CHARS]
+    return v
+
+
+@router.get("/db/tables")
+async def db_tables():
+    """表清单：{tables: [{name, rows}, ...]}（rows=行数；表缺失视为 0，不中断）"""
+    db = await get_db()
+    try:
+        tables = []
+        for name in _DB_TABLES:
+            try:
+                cur = await db.execute(f"SELECT COUNT(*) AS n FROM {name}")
+                row = await cur.fetchone()
+                tables.append({"name": name, "rows": int(row["n"])})
+            except Exception:
+                tables.append({"name": name, "rows": 0})
+        return {"tables": tables}
+    finally:
+        await db.close()
+
+
+@router.get("/db/table/{table_name}")
+async def db_table(table_name: str, limit: int = 50):
+    """表数据预览：{name, columns, rows}（rows=值数组行，limit≤200，字段截断 500 字符）。
+    表名不在白名单 → 404。"""
+    if table_name not in _DB_TABLES:
+        raise HTTPException(status_code=404, detail=f"未知表：{table_name}")
+    n = min(max(limit, 1), _MAX_DB_ROWS)
+    db = await get_db()
+    try:
+        cur = await db.execute(f"PRAGMA table_info({table_name})")
+        columns = [r["name"] for r in await cur.fetchall()]
+        cur = await db.execute(f"SELECT * FROM {table_name} LIMIT ?", (n,))
+        rows = [[_truncate_cell(v) for v in row] for row in await cur.fetchall()]
+    finally:
+        await db.close()
+    return {"name": table_name, "columns": columns, "rows": rows}

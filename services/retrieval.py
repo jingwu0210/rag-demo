@@ -74,11 +74,13 @@ class RetrievalService:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(pool, fn, *args)
 
-    async def retrieve(self, query: str, doc_type: str = None) -> RetrievalOutput:
+    async def retrieve(self, query: str, doc_type: str = None,
+                       mode: Optional[str] = None) -> RetrievalOutput:
+        """检索编排。mode=None → config 全局值；否则请求级覆盖（/chat 的 mode 参数透传）。"""
         total_start = time.perf_counter()
 
         # 读取当前模式，决定粗排是否跳过 AdaptiveK（R7: rerank 候选池独立）
-        mode_cfg = ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
+        mode_cfg = mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
         need_rerank = (mode_cfg == "hybrid+rerank"
                        and ConfigRegistry.get("reranker.enabled", True))
         if need_rerank:
@@ -96,7 +98,7 @@ class RetrievalService:
             result = await self.guard.with_stage_timeout(
                 "retrieval",
                 self._call(self.retriever.retrieve, self._retrieval_pool,
-                           query, coarse_top_k, doc_type, need_rerank))
+                           query, coarse_top_k, doc_type, need_rerank, mode_cfg))
         except StageTimeoutError:
             logger.warning("retrieval_stage_timeout", query=query)
         retrieval_ms = int((time.perf_counter() - t0) * 1000)
