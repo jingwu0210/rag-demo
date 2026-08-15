@@ -228,6 +228,23 @@ def test_evaluate_qa_timeout_excluded_from_refusal():
     assert result["refusal_appropriateness"] is None   # 超时 → None，不误计漏拒
 
 
+def test_judge_oos_refusal_returns_binary():
+    """OOS 拒答裁判：软拒答（无法回答+提供信息）→ 1，编造 → 0，judge 失败 → 0"""
+    from eval.runner import _judge_oos_refusal
+
+    items = [
+        ("帮我写一首关于离职的诗",
+         "根据现有文档，我无法回答。您的问题超出了内部知识库的覆盖范围。"),
+        ("公司明天的股价会涨吗", "根据我的分析，公司股价明天会涨 5%。"),
+    ]
+    with patch("eval.runner._judge_batch_async",
+               return_value=[(1, "软拒"), (0, "编造")]):
+        assert _judge_oos_refusal(items) == [1, 0]
+    with patch("eval.runner._judge_batch_async",
+               return_value=[None, None]):
+        assert _judge_oos_refusal(items) == [0, 0]   # judge 失败保守判 0
+
+
 # ═══ 3. 三配置对比 Runner ══════════════════════════════════
 
 def test_run_comparison_executes_three_configs(tmp_path):
