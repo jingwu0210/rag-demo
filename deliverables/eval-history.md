@@ -14,7 +14,15 @@
 | R6 | 2026-08-15 下午 | 110 条（baseline） | 新语料 baseline 首轮（用户语料 252 chunks + F1-F4 修复前）；在册异常见 R6 表 | eval_20260815_153126_066eddcb |
 | R7 当前 | 2026-08-15 夜 | 110 条（baseline） | F1 空格 PDF 根治 + F2 OOS 口径 + F3 PII 扩展 + F4 judge 盲区 + max_chunks 10 + expire 开启；全指标达标 | eval_20260815_173117_b48364fd |
 
-## R1 基线数据（53 条测试集）
+
+## ⚠️ 归档说明（2026-08-15）
+
+**R1-R5 已归档**：基于 53/65/80 条旧语料（演示语料），与当前 110 条 baseline（新语料 252 chunks）不可直接对比，意义有限。下方 R1-R5 各节仅作历史溯源，不再作为 before/after 对比依据；**当前有效轮次为 R6-R7**。
+
+---
+
+
+## R1 基线数据（53 条测试集）【已归档】
 
 | Config | Faithfulness | Context Precision | Answer Compliance* | Refusal | Style | P50 (ms) | P95 (ms) | Avg Tokens |
 |--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -24,7 +32,7 @@
 
 \* R1/R2 的 Answer Compliance 为规则近似语义（有答案且检索到 sources 计 1）；R3 起改为 LLM judge 5 分制 score/5。
 
-## R2 中途数据（53 条测试集，R1-R4 修复后但 rerank 降级未修）
+## R2 中途数据（53 条测试集，R1-R4 修复后但 rerank 降级未修）【已归档】
 
 | Config | Faithfulness | Context Precision | Answer Compliance* | Refusal | Style | P50 (ms) | P95 (ms) | Avg Tokens |
 |--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -32,7 +40,7 @@
 | hybrid | 0.8947 | 0.6349 | 1.0 | 1.0 | 0.63 | 1520 | 2163 | 1481 |
 | hybrid+rerank | 0.8569 | 0.6647 | 1.0 | 1.0 | 0.71 | 3275 | 4171 | 1192 |
 
-## R3 当前数据（65 条测试集，全部修复后）
+## R3 当前数据（65 条测试集，全部修复后）【已归档】
 
 | Config | Faithfulness | Context Precision | Answer Compliance | Refusal | Style | P50 (ms) | P95 (ms) | Avg Tokens |
 |--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -40,7 +48,7 @@
 | hybrid | 0.8956 | 0.6330 | 1.0 | 0.9692 | 0.8264 | 1161 | 1860 | 1487 |
 | hybrid+rerank | 0.9090 | 0.6296 | 1.0 | 0.9692 | 0.8679 | 1993 | 2729 | 1155 |
 
-## R4 当前数据（65 条测试集，并发 5，语料修复 + 关键词层删除后）
+## R4 当前数据（65 条测试集，并发 5，语料修复 + 关键词层删除后）【已归档】
 
 | Config | Faithfulness | Context Precision | Answer Compliance* | Refusal | Style | P50 (ms) | P95 (ms) | Avg Tokens | Avg Chunks | Unanswered† |
 |--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -51,7 +59,7 @@
 \* R4 的 Compliance=1.0 为旧口径产物：judge 二值坍缩（1-4 档零使用，40 个 0 分 + 114 个 5 分）+ 0 分排除出均值。已由 R9（judge 判定规则补强）与 v1.10（0 分参与均值）修复，待重跑验证。
 † R4 的 Unanswered 为旧口径（judge 0 分占比）；v1.10 起语义改为"系统未作答（refused/timeout/空答案）占比"。
 
-## R4 在册异常（诊断已完成，修复状态各异）
+## R4 在册异常（诊断已完成，修复状态各异）【已归档】
 
 | # | 异常 | 证据 | 根因 | 状态 |
 |---|------|------|------|------|
@@ -61,7 +69,7 @@
 | 4 | Compliance 恒 1.0 无区分度 | 1-4 档零使用；病假样本答案正确（依据在 chunks 全文）却被判 0，重放 7/7 复现 | judge 长混合上下文粗读误判 + 0 分排除口径 | ✅ **R9 + v1.10 已修**，待重跑验证 |
 | 5 | hybrid CP=0.7214 低于 vector 0.8513 | hybrid avg 7.72 chunk/题（BM25 无关命中混入）；RRF 阈值 0.0164 过滤力近零 | 混合检索噪声 + 测试集术语类样本占比不足 | ⏳ **P2 待决策**（vector 余弦旁路过滤层） |
 
-## R5 当前数据（80 条 v2 测试集，全部修复后）
+## R5 当前数据（80 条 v2 测试集，全部修复后）【已归档】
 
 | Config | Faithfulness | Context Precision | Answer Compliance | Refusal | Style | P50 (ms) | P95 (ms) | Avg Tokens | Avg Chunks | Unanswered† |
 |--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -149,7 +157,7 @@
 | 5 | 口语短问句拒答（P2c 代价） | "公司年假有几天？" vector top1=0.236，BM25 命中"年假"但被 P2c 滤空 | ⏳ P2d 待做（用户暂缓） |
 | 6 | 模型代际 | R7 为 deepseek-chat 产物（2026-07-24 停服）；v1.17 起 deepseek-v4-flash，历史对比需注明模型差异 | 📝 已切换 config |
 
-## 核心对比结论
+## 核心对比结论（R1-R4 旧语料，已归档）
 
 ### R1 → R2（检索质量修复链：AdaptiveK 分数语义 + OOS 分层 + 截断取消）
 
