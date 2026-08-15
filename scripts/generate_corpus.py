@@ -27,24 +27,47 @@ def _wrap_text(text, font_size, page_width=595, left_margin=72):
     return lines
 
 
+import re as _re
+
+_CJK_BLOCK_RE = _re.compile(r'[一-鿿　-〿＀-￯]+|[^一-鿿　-〿＀-￯]+')
+
+
+def _has_cjk(s):
+    return any('一' <= ch <= '鿿' for ch in s)
+
+
+def _render_line(page, x, y, text, size, color=(0, 0, 0)):
+    """块级双字体渲染（R13 F1）：CJK 块用 china-s、拉丁/数字块用 helv。
+
+    根因：china-s 字体渲染拉丁字符/数字时每个字符后插空格（提取文本
+    "S y s t e m" / "1 0 天"），BGE-M3 语义嵌入失效，R6 实测 16 题 ×3 配置
+    CP=0。逐块渲染 + get_text_length 累进 x 坐标，根治空格化。
+    """
+    x_cursor = x
+    for tok in _CJK_BLOCK_RE.findall(text):
+        font = CJK_FONT if _has_cjk(tok) else LATIN_FONT
+        page.insert_text((x_cursor, y), tok, fontsize=size, fontname=font, color=color)
+        x_cursor += fitz.get_text_length(tok, fontname=font, fontsize=size)
+
+
 def _add_text_page(doc, title, lines, font_size=11.0):
     """添加一页。lines 元素: str 或 (text, opts)；opts 支持 size/font/bold/indent/color。
-    v1.6: 长行自动换行，防止超出页宽被截断。"""
+    v1.6: 长行自动换行，防止超出页宽被截断。
+    R13 F1: 块级双字体渲染（见 _render_line），标题行同样处理。"""
     page = doc.new_page(width=595, height=842)  # A4
     y = 72
-    page.insert_text((72, y), title, fontsize=16, fontname=CJK_FONT, color=(0, 0, 0))
+    _render_line(page, 72, y, title, 16)
     y += 36
     for item in lines:
         text, opts = item if isinstance(item, tuple) else (item, {})
         size = opts.get("size", font_size)
-        font = opts.get("font", CJK_FONT)
         color = opts.get("color", (0, 0, 0))
         for wrapped in _wrap_text(text, size):
             y += size * 1.6
             if y > 800:
                 page = doc.new_page(width=595, height=842)
                 y = 72
-            page.insert_text((72, y), wrapped, fontsize=size, fontname=font, color=color)
+            _render_line(page, 72, y, wrapped, size, color)
     return doc
 
 
