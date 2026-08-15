@@ -96,6 +96,7 @@
 | v1.13 | 2026-08-15 | P4 分层指标报表（oos_refusal_rate / normal_refusal_rate / 未作答三类分解，CSV 15→17 列）；测试集 v2（80 条 = 原 65 条 + 三类区分度样本 15 条，多义词类语料不支持不硬造）；发现 R4 时 chroma HNSW 索引未完整落盘（与元数据不同步，挂账观察） |
 | v1.14 | 2026-08-15 | 一键交付契约：唯一外部依赖 = DeepSeek API Key。run.sh/eval.sh 增加 key 前置检查（缺失明确报错）、HF_ENDPOINT/PIP_INDEX_URL 镜像兜底（默认国内镜像、环境变量可 override）、**代理兼容（镜像域名 NO_PROXY 绕过系统代理，DeepSeek API 仍走用户代理）**、**空库引导双路（assets/corpus/ 已有用户文档 → 直接入库用户语料不生成演示语料；无用户文档 → 生成演示语料）**、eval.sh 增加 venv/知识库前置检查；测试集默认切换 v2；日志 JSONRenderer ensure_ascii=False（中文直接可读，与字段字典样例一致）；R5 实测闭环 max_workers 5 的 MPS 无退化假设 |
 | v1.15 | 2026-08-15 | 目录分层重构（assets/workspace）：assets = 版本化资产进 git（corpus 语料源 / testsets 测试集 / chroma 预置向量索引）；workspace = 机器状态忽略（ocr / logs / results / cache.db）。config paths 段全改，代码/脚本/文档全部引用点同步（铁律 8） |
+| v1.16 | 2026-08-15 | R6 归因修复（F1-F4）+ 参数调整：F1 空格 PDF 根治（china-s 渲染拉丁字符插空格的根因 → 块级双字体渲染，generate_corpus 与语料 PDF 同步修复重灌，R6 实测该缺陷致 16 题×3 配置 CP=0 占损失 50.8%）；F2 OOS 显式排除出 compliance judge（大语料下 RefusalCheck 空结果层失效，38 个 OOS 样本 refused=False 漏过过滤）；F3 PII pattern 扩展（银行卡 Luhn/国际电话/生日——R6 暴露卡号明文回显与美式电话不匹配）；F4 judge 盲区约束（检索片段 ≠ 语料全文，条款不在片段中不得判编造 + PII 脱敏视为正确）；max_chunks 8→10（答案 chunk 常落第 5-8 位）；expire 默认开启（legacy 曾排检索第 1 位）；§9.2 挂账两项（拒答机制对半相关召回敏感度 / 单文档下架）+ 多轮评估 Evolvability；eval.sh 结果摘要打印终端 |
 
 ---
 
@@ -2267,7 +2268,6 @@ pii_redact_total, injection_blocked_total
 ```
 
 - **v1.9 判定规则补强根因（重放验证实证）**：R4 中"答案正确但判 0"（如病假样本，chunks 全文含"二级甲等以上医院"原文，judge 7/7 次重放全判 0）— judge 在长混合上下文里粗读，把"没找到"当成"不存在"，且 1-4 档从未被使用（三配置合计 40 个 0 分 + 114 个 5 分）。加"逐条核对"约束后重放 7/7 全部修正为 5 分，正确样本无误伤；两段式 judge（B 方案）重放验证与单段强化结果一致，无增量价值故不采用。judge 理由随分数持久化进 per_qa（judge_reason 字段），误判可诊断不必重放 API。
-```
 
 - **实现**：批量 asyncio.gather + Semaphore(5) 限流；judge 失败不中断评估（记 None）
 
@@ -2863,6 +2863,8 @@ echo "评估完成: workspace/results/report.csv"
 | Query 改写（可选） | 配置开关 `query_rewriting.enabled: true` | 复杂指代消解提升 |
 | Bad Case 自动回流 | 将 refused + low_faithfulness 的 case 加入评估集 | 持续质量提升 |
 | **多轮对话评估（Evolvability 项）** | 对话序列测试集（独立文件 `conversations.json`，~15-20 序列 × 2-4 轮）：同 session_id 连问测指代消解/上下文依赖（如"年假有多少天？→那病假呢？→都要提前申请吗？"）；每轮按单轮指标独立打分 + 新增"指代解析正确率"（追问轮次答对目标主题占比）。runner 增加多轮模式（同 session 连问，逐轮 per_qa 记录） | 覆盖 FR-2.1 多轮能力的质量评估，当前评估体系仅有单轮语义（Ragas 四指标均单轮定义） |
+| **单文档下架（Evolvability 项）** | 显式下架端点/脚本参数（如 `ingest_corpus.py --deactivate <doc_group>` 或 `DELETE /ingest/{doc_group}`）：复用 doc_group 软下线机制，将指定文档族全部置 `is_active=False` | 补全语料 CRUD：当前仅 wipe 全量重灌与版本替换软下线两条路径；单文档撤回（错误文档/合规删除/提前下架）需人工挑文件重灌 |
+| **拒答机制对半相关召回的敏感度（R6 挂账）** | R6 归因发现：大语料（252 chunks）下 OOS 问题检索不再为空（总能捞到半相关 chunk），RefusalCheck 的空结果/置信度两层触发失效 → 模型自由输出"无法回答"文本而 refused=False（38 个 OOS 样本）。评估口径已修（F2：OOS 不进 compliance judge），但系统级拒答退化待解决：方向为后置识别模型回避式输出并补标 refused、或对低 top1 分数的半相关召回提高拒答敏感度 | 大语料场景下 refusal 指标的真实能力需独立验证；小语料演示无法暴露此问题 |
 
 ---
 
