@@ -38,11 +38,30 @@ export no_proxy="$NO_PROXY"
 mkdir -p workspace/logs
 # 每次评估独立日志文件（带时间戳），不覆盖历史评估的日志证据
 LOG_FILE="workspace/logs/eval-$(date +%Y%m%d_%H%M%S).log"
+
+TEST_SET=$(.venv/bin/python -c "
+from core.config import ConfigRegistry
+ConfigRegistry.init('config.yaml')
+import json
+with open(ConfigRegistry.get('eval.test_set_path')) as f:
+    print(len(json.load(f)))
+" 2>/dev/null || echo "?")
+CONFIGS=$(.venv/bin/python -c "
+from core.config import ConfigRegistry
+ConfigRegistry.init('config.yaml')
+print(len(ConfigRegistry.get('eval.compare_configs', [])))
+" 2>/dev/null || echo "3")
+
+echo "🚀 开始评估"
+echo "   测试集: ${TEST_SET} 条 × ${CONFIGS} 个检索配置（vector-only / hybrid / hybrid+rerank）"
+echo "   并发: 5，预计 15-25 分钟（含 LLM judge 打分）"
+echo "   进度日志: tail -f $LOG_FILE"
 # stdout = structlog JSON 结构化日志（符合日志字段字典）；
 # stderr = 第三方库裸噪音（urllib3 警告/chromadb telemetry/tokenizers），
 # 单独存 .stderr.log，不污染主日志文件
 .venv/bin/python -m eval.runner --output workspace/results/ \
     > "$LOG_FILE" 2> "${LOG_FILE%.log}.stderr.log"
-echo "评估完成: workspace/results/eval_report.csv"
-echo "评估日志: $LOG_FILE"
-echo "噪音日志: ${LOG_FILE%.log}.stderr.log"
+echo "✅ 评估完成"
+echo "   报表: workspace/results/eval_report.csv（Markdown: eval_report.md）"
+echo "   评估日志: $LOG_FILE"
+echo "   噪音日志: ${LOG_FILE%.log}.stderr.log"
