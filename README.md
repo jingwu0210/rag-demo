@@ -38,7 +38,7 @@ export DEEPSEEK_API_KEY=<your-key>
 
 **配套测试集（用自己的语料评估时）**：
 
-预置测试集 `assets/testsets/test_set_v2.json`（80 条）是针对演示语料设计的问题——用你自己的语料后，这些问题的答案不在你的知识库里，评估会大面积拒答。请为你的语料准备配套测试集（JSON 格式）：
+预置测试集 `assets/testsets/test_set_archived_v2.json`（80 条，演示语料配套）是针对演示语料设计的问题——用你自己的语料后，这些问题的答案不在你的知识库里，评估会大面积拒答。请为你的语料准备配套测试集（JSON 格式）：
 
 ```json
 [
@@ -47,7 +47,7 @@ export DEEPSEEK_API_KEY=<your-key>
 ]
 ```
 
-放置方式二选一：① 直接替换 `assets/testsets/test_set_v2.json`；② 存为独立文件并在 config.yaml 改 `eval.test_set_path` 指向它。建议混入 10-20% 知识库外的 out-of-scope 问题（`is_out_of_scope: true`）以测拒答能力。
+放置方式二选一：① 直接替换测试集文件（新语料 baseline 建成后为 `assets/testsets/test_set.json`）；② 存为独立文件并在 config.yaml 改 `eval.test_set_path` 指向它。建议混入 10-20% 知识库外的 out-of-scope 问题（`is_out_of_scope: true`）以测拒答能力。
 
 **镜像 override（海外环境可选）**：脚本默认使用国内镜像（HuggingFace `https://hf-mirror.com`、pip 清华源）。海外环境如镜像不可用，可显式覆盖：
 
