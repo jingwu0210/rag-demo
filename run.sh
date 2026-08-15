@@ -159,6 +159,7 @@ done
 
 if [ "$READY" = "1" ]; then
     echo "✅ 服务已就绪: http://localhost:8000"
+    echo "   演示 UI:     http://localhost:8000/rag-gen-ai-service-demo"
     echo "   API 文档:   http://localhost:8000/docs"
     echo "   健康检查:   http://localhost:8000/health"
     echo "   Ctrl+C 停止服务"
