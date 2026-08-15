@@ -2286,7 +2286,7 @@ pii_redact_total, injection_blocked_total
 
 - **计算公式**：`Refusal Appropriateness = 正确处理样本数 / 总测试样本数`
 - **评测集要求**：混入 20% out-of-scope 问题 + 三类区分度样本（v1.4 测试集 65 条含 12 条 OOS）：
-- **测试集 v2（v1.13，80 条）**：`assets/testsets/test_set_v2.json` = 原 65 条逐字节保留 + 15 条新增三类区分度样本（多数字条款 5 / 中英混合 5 / 长复杂政策 5）。多义词类经语料盘点**不支持**（语料无真正双义实例，不硬造——避免无法回答样本）。**v2 为默认测试集**（config `eval.test_set_path` 指向 v2）；回退 v1 用 override；before/after 对比因 test_set_hash 变化，按 65 条公共问题子集（per_qa question 交集）重算，对比口径在 eval-history 注明：
+- **测试集 v2（v1.13，80 条）**：`assets/testsets/test_set_archived_v2.json` = 原 65 条逐字节保留 + 15 条新增三类区分度样本（多数字条款 5 / 中英混合 5 / 长复杂政策 5）。多义词类经语料盘点**不支持**（语料无真正双义实例，不硬造——避免无法回答样本）。**v2 为演示语料配套测试集**（config `eval.test_set_path` 指向归档文件）；新语料 baseline 测试集建成后指向 `test_set.json`（不带版本，历史测试集以 archived_v1/v2 归档）；before/after 对比因 test_set_hash 变化，按 65 条公共问题子集（per_qa question 交集）重算，对比口径在 eval-history 注明：
   - **精确术语类**（ISO 27001/429/SEV-1 等）— 发挥 BM25 优势，否则测试集对 hybrid 不公平
   - **复杂多跳类**（需多 chunk 拼合）— 让 Faithfulness 对检索完整性敏感
   - **边界模糊类**（关键词误伤/safety 边界/半相关）— 让 Refusal 指标有区分度
@@ -2862,6 +2862,7 @@ echo "评估完成: workspace/results/report.csv"
 | L2 语义缓存 | ChromaDB 存 query embedding，相似度 > 0.95 复用答案 | 缓存命中率 +10-15% |
 | Query 改写（可选） | 配置开关 `query_rewriting.enabled: true` | 复杂指代消解提升 |
 | Bad Case 自动回流 | 将 refused + low_faithfulness 的 case 加入评估集 | 持续质量提升 |
+| **多轮对话评估（Evolvability 项）** | 对话序列测试集（独立文件 `conversations.json`，~15-20 序列 × 2-4 轮）：同 session_id 连问测指代消解/上下文依赖（如"年假有多少天？→那病假呢？→都要提前申请吗？"）；每轮按单轮指标独立打分 + 新增"指代解析正确率"（追问轮次答对目标主题占比）。runner 增加多轮模式（同 session 连问，逐轮 per_qa 记录） | 覆盖 FR-2.1 多轮能力的质量评估，当前评估体系仅有单轮语义（Ragas 四指标均单轮定义） |
 
 ---
 
