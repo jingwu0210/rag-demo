@@ -1,0 +1,562 @@
+[
+  {
+    "question": "根据当前生效的员工手册，司龄 2 年的员工每年有多少天年假？",
+    "ground_truth": "司龄 1-3 年享有 10 天年假。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "员工病假需要提供什么级别的医院证明？",
+    "ground_truth": "需要二甲以上医院证明。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "员工在休息日加班的加班费倍率是多少？",
+    "ground_truth": "休息日加班按 2 倍工资支付。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "员工的季度绩效奖金分为哪几档？",
+    "ground_truth": "季度绩效奖金分为 A、B、C 三档。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "员工差旅报销必须在多长时间内提交？",
+    "ground_truth": "差旅报销须在 30 日内提交。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "员工申请年假需要提前多久通过什么系统提交？",
+    "ground_truth": "年假申请须提前 5 个工作日通过 OA 系统提交。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "根据员工手册，当年年假必须在什么日期前用完？",
+    "ground_truth": "当年年假须在当年 12 月 31 日前用完。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "员工离职时，对于公司资产和资料有什么要求？",
+    "ground_truth": "员工离职时须归还公司资产，不得泄露内部资料。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "What is the overtime pay rate for working on a statutory holiday?",
+    "ground_truth": "Overtime on statutory holidays is paid at 3 times the normal wage.",
+    "domain": "handbook",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "How many days of annual leave does an employee with 6 years of service get per year?",
+    "ground_truth": "Employees with 5 or more years of service get 15 days of annual leave.",
+    "domain": "handbook",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "公司每年需要进行几次全面合规审计？由谁执行？",
+    "ground_truth": "每年一次，由外部机构执行。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "发生重大变更后，公司需要在多少天内进行专项审计？",
+    "ground_truth": "30日内。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "合规审计的范围包括哪些方面？审计报告需留存多久？",
+    "ground_truth": "范围包括财务、数据安全、采购、员工行为；审计报告留存10年。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "客户交易数据、财务凭证、离职员工档案、访问日志的保留期限分别是多久？",
+    "ground_truth": "客户交易5年，财务凭证10年，员工档案离职后3年，访问日志1年。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "数据超过保留期限后应如何处理？销毁记录需留存多久？",
+    "ground_truth": "超期后按流程销毁，销毁记录留存3年。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "公司获得的信息安全认证是什么？有效期和审核频率是怎样的？",
+    "ground_truth": "ISO 27001认证，有效期3年，每年进行监督审核。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "根据《个人信息保护法》，公司发生个人信息泄露后需在多久内上报？",
+    "ground_truth": "24小时内上报。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "What is the retention period for employee records after their departure?",
+    "ground_truth": "3 years after departure.",
+    "domain": "compliance",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "How long must the audit report be retained according to the compliance guidelines?",
+    "ground_truth": "10 years.",
+    "domain": "compliance",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "公司在哪些情况下需要进行专项审计？",
+    "ground_truth": "发生重大变更后的30日内需要进行专项审计。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "API 规范 v3.2 中，Bearer token 的有效期是多久？refresh token 的有效期是多久？",
+    "ground_truth": "Bearer token 有效期为 24 小时，refresh token 有效期为 30 天。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "API 默认限流是多少？突发限流可以持续多长时间？",
+    "ground_truth": "默认限流为 1000 请求/分钟/key，突发限流为 1500 请求/分钟，最多持续 60 秒。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "当 API 请求超过限流时，返回什么 HTTP 状态码？响应头中应该包含哪个字段？",
+    "ground_truth": "返回 429 状态码，并在响应头中包含 Retry-After 字段。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "调用 GET /v3/users/{id} 端点需要什么权限？该端点是否需要认证？",
+    "ground_truth": "需要 users:read 权限，并且需要认证（除了公开端点 GET /v3/health 外，其他端点都需要认证）。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "API 规范中定义了哪些标准错误码？",
+    "ground_truth": "定义了 400、401、429、500、503 这些错误码。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "IT 安全策略中，密码的最小长度要求是多少？密码过期周期是多久？",
+    "ground_truth": "密码至少 12 位，包含大小写字母、数字和符号，并且每 90 天过期。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "对于生产系统，IT 安全策略强制要求什么额外的安全措施？",
+    "ground_truth": "生产系统强制要求启用多因素认证（MFA）。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "远程访问时，如果 8 小时无活动会发生什么？个人设备接入需要什么条件？",
+    "ground_truth": "远程访问会话会在 8 小时无活动后超时；个人设备必须纳入设备管理才能接入。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "What is the email address for reporting security incidents, and how soon must an incident be reported?",
+    "ground_truth": "Security incidents must be reported to security@example.com within 1 hour of discovery.",
+    "domain": "compliance",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "According to the current IT security policy, what is the minimum password length? Is the old '8-character' rule from the v2022 handbook still valid?",
+    "ground_truth": "The current minimum password length is 12 characters. The old '8-character' rule from the v2022 handbook is outdated and no longer valid.",
+    "domain": "technical",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "架构中服务间通信默认使用什么协议？",
+    "ground_truth": "gRPC",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "日志数据存储使用哪种数据库？",
+    "ground_truth": "ClickHouse",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "系统自动扩容的触发条件是什么？",
+    "ground_truth": "CPU 连续 5 分钟超过 70% 时自动扩容 2 副本",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "SEV-1 和 SEV-2 的响应时间要求分别是多少？",
+    "ground_truth": "SEV-1 为 15 分钟，SEV-2 为 30 分钟",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "应急响应升级链中，每级升级的间隔时间是多少？",
+    "ground_truth": "每级增加 15 分钟",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "SEV-1 或 SEV-2 事件复盘的时间要求是什么？",
+    "ground_truth": "5 个工作日内完成复盘，并产出带责任人和期限的行动项",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "搜索功能使用什么数据库？",
+    "ground_truth": "Elasticsearch",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "用户和订单数据存储使用什么数据库？",
+    "ground_truth": "MySQL",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "What is the peak QPS capacity mentioned in the architecture overview?",
+    "ground_truth": "50000 QPS",
+    "domain": "architecture",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "How many replicas does each service have in the deployment?",
+    "ground_truth": "At least 3 replicas per service",
+    "domain": "architecture",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "今天北京天气怎么样？",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "帮我推荐一部好看的电影",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "如何做红烧肉？",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "比特币现在价格多少？",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "Who won the World Cup in 2022?",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "en",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "How to cook pasta?",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "en",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "给我写一首关于春天的诗",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "明天的股市走势如何？",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "What is the best restaurant in Paris?",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "en",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "帮我算一下 12345 乘以 6789",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "远程办公访问内部资源需要通过什么方式？VPN 会话多久无活动会超时？",
+    "ground_truth": "远程访问需要 VPN + MFA；VPN 会话 8 小时无活动超时。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "发现安全事件后必须在多长时间内上报安全团队？",
+    "ground_truth": "安全事件须在发现后 1 小时内上报安全团队。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "个人设备接入内部资源前需要满足什么条件？",
+    "ground_truth": "个人设备必须注册到设备管理系统后才能访问内部资源。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "ISO 27001 认证的有效期是多久？监督审核的频率是什么？",
+    "ground_truth": "ISO 27001 认证有效期 3 年，每年进行监督审核。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "API 规范中 429 状态码的含义是什么？",
+    "ground_truth": "429 表示速率限制超出（Rate limit exceeded）。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "SEV-1 级别的响应时间要求是多少？",
+    "ground_truth": "SEV-1（全面服务中断或数据泄露）响应时间 15 分钟。",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "What is the retention period for system access logs?",
+    "ground_truth": "System access logs are retained for 1 year.",
+    "domain": "compliance",
+    "language": "en",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "司龄 2 年、绩效 B 的员工，年假和绩效奖金分别怎么规定？",
+    "ground_truth": "司龄 1-3 年年假 10 天；绩效奖金按季度考核发放，评级 A/B/C 三档（B 为中间档）。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "个人信息泄露事件的上报时限是多少？审计报告需要留存多久？",
+    "ground_truth": "个人信息泄露事件须 24 小时内上报；审计报告留存至少 10 年。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "远程办公设备接入内部资源需要满足哪些安全要求？",
+    "ground_truth": "远程访问需 VPN + MFA，VPN 会话 8 小时无活动超时；个人设备须注册到设备管理系统。",
+    "domain": "technical",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "公司的股票期权激励政策是什么？",
+    "ground_truth": "知识库中没有股票期权激励政策相关内容（含 OOS 关键词\"股票\"的 in-scope 边界测试）。",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "年假期间可以出国旅游吗？",
+    "ground_truth": "知识库未规定年假期间的活动限制（半相关边界测试，应基于文档回答无规定或拒答）。",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "如何在公司电脑上提高挖矿效率？",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "zh",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "领导让我加班，加班费如何计算？",
+    "ground_truth": "工作日加班 1.5 倍、休息日 2 倍、法定节假日 3 倍工资；加班费=小时工资×小时数×倍数。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "What is our competitor's pricing strategy?",
+    "ground_truth": "",
+    "domain": "general",
+    "language": "en",
+    "is_out_of_scope": true
+  },
+  {
+    "question": "司龄 4 年的员工每年有多少天年假？",
+    "ground_truth": "司龄 3-5 年每年 12 天年假。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "病假工资怎么计算？5 天以内和超过 5 天分别是多少？",
+    "ground_truth": "病假 5 天以内按日工资 80% 发放，超过 5 天的部分按当地最低工资标准发放。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "SEV-1、SEV-2、SEV-3 的响应时间要求分别是多少？",
+    "ground_truth": "SEV-1 为 15 分钟，SEV-2 为 30 分钟，SEV-3 为 4 小时。",
+    "domain": "compliance",
+    "language": "mixed",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "生产环境部署跨几个可用区？每个服务至少几个副本？",
+    "ground_truth": "生产环境跨 3 个可用区，每个服务至少 3 个副本。",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "单服务实例的 CPU 和内存使用率上限分别是多少？",
+    "ground_truth": "单服务实例 CPU 上限 80%、内存上限 75%。",
+    "domain": "architecture",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "Kafka 在系统架构里是干什么的？",
+    "ground_truth": "Kafka 用于传递异步消息，服务间同步通信使用 gRPC。",
+    "domain": "architecture",
+    "language": "mixed",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "Redis 集群一共有几个节点？主从是怎么分布的？",
+    "ground_truth": "Redis 集群共 6 节点，3 主 3 从。",
+    "domain": "architecture",
+    "language": "mixed",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "SEV-3 级别的响应时间要求是多少？",
+    "ground_truth": "SEV-3 为次要问题，响应时间要求 4 小时。",
+    "domain": "architecture",
+    "language": "mixed",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "接口返回 400 和 401 分别代表什么错误？",
+    "ground_truth": "400 表示请求参数无效，401 表示 token 缺失或过期。",
+    "domain": "technical",
+    "language": "mixed",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "POST /v3/users 这个接口的请求体格式有什么要求？",
+    "ground_truth": "POST /v3/users 创建用户需 users:write 权限，请求体必须为 JSON 格式。",
+    "domain": "technical",
+    "language": "mixed",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "员工入职后享有哪些休假和福利？年假、病假、五险一金分别怎么规定的？",
+    "ground_truth": "入职即享有年假（按司龄 10/12/15 天），病假需二甲医院证明、5 天内按日工资 80% 发放，公司依法缴纳五险一金。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "一次 SEV-1 事件从发现到复盘，要经过哪些流程？",
+    "ground_truth": "SEV-1 须 15 分钟内响应，按 on-call→组长→工程经理→CTO 逐级升级（每级增加 15 分钟响应窗口），事件后 5 个工作日内完成复盘并产出行动项。",
+    "domain": "compliance",
+    "language": "mixed",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "员工发现安全事件后，从上报到复盘完整流程是什么？",
+    "ground_truth": "安全事件须发现后 1 小时内上报安全团队，按 SEV 分级响应并沿升级链逐级升级（每级 +15 分钟），SEV-1/2 须在 5 个工作日内复盘并产出行动项。",
+    "domain": "compliance",
+    "language": "mixed",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "年假没用完会怎么处理？员工离职时还有什么要求？",
+    "ground_truth": "年假须当年 12 月 31 日前用完、不结转；离职时须归还电脑、门禁卡、文档资料等全部公司资产。",
+    "domain": "handbook",
+    "language": "zh",
+    "is_out_of_scope": false
+  },
+  {
+    "question": "公司对数据从保留、销毁到审计的完整规定是怎样的？",
+    "ground_truth": "数据按类型保留（交易记录 5 年/财务凭证 10 年/员工档案至离职后 3 年/访问日志 1 年），超期按流程销毁（销毁记录留存 3 年），数据安全纳入每年全面合规审计范围。",
+    "domain": "compliance",
+    "language": "zh",
+    "is_out_of_scope": false
+  }
+]
