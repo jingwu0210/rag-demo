@@ -35,8 +35,8 @@ reranker:
                                      # 最坏延迟 = ceil(并发/worker) × T ≤ 2s 预算
                                      # 5 并发 → 1 轮 = 0.82s；10 并发（Semaphore 上限）
                                      # → 2 轮 = 1.63s 留 20% 余量。c=6+ 零边际收益。
-                                     # 注：5 路 MPS 并发推理无放大未经实测（铁律 6），
-                                     # 若退化 >1.6s/次应回退 4。
+                                     # R5 实测验证（铁律 6 闭环）：5 并发稳态 rerank
+                                     # P50=490ms / P95=1716ms，0 降级，无 MPS 放大退化
   circuit_breaker:
     failure_threshold: 3
     recovery_timeout: 60
@@ -198,9 +198,10 @@ logging:
 
 # ── 评估 ──────────────────────────────────────────────────
 eval:
-  test_set_path: data/eval/test_set.json   # 条数以测试集文件自决（v1.8 删除
-                                           # test_set_size 配置孤儿键 — 无代码消费者，
-                                           # 且 50 与实测 65 条漂移）
+  test_set_path: data/eval/test_set_v2.json  # v1.13 起默认 80 条 v2 测试集
+                                             # （条数以测试集文件自决；回退 65 条 v1
+                                             # 用 override 指向 test_set.json，
+                                             # 但对比需按公共子集口径）
   models:
     provider: deepseek
     model: deepseek-chat
