@@ -363,7 +363,7 @@ async def _insert_eval_rows(run_id: str, faithfulness: float = 0.7):
 
 
 def test_report_csv_with_metrics():
-    """GET /report：request_metrics 聚合 → 200 + text/csv + 表头与数据行"""
+    """GET /report：request_metrics 聚合（按 source 分组）→ 200 + text/csv + 表头与数据行"""
     asyncio.run(init_db())
     asyncio.run(_insert_metrics_rows())
 
@@ -375,15 +375,62 @@ def test_report_csv_with_metrics():
     lines = [ln.strip() for ln in body.strip().splitlines() if ln.strip()]
     assert lines[0] == "metric,value"
     metrics = dict(ln.split(",") for ln in lines[1:])
-    assert metrics["total_requests"] == "3"
-    assert metrics["p50_latency_ms"] == "200"       # numpy.percentile(50)
-    assert metrics["p95_latency_ms"] == "290"       # numpy.percentile(95)
-    assert metrics["total_tokens"] == "90"
-    assert metrics["avg_tokens_per_call"] == "30.0"
-    assert metrics["cache_hit_rate"] == "0.6667"    # 2/3
-    assert metrics["refusal_rate"] == "0.3333"      # 1/3
-    assert metrics["pii_redactions_total"] == "3"
-    assert metrics["injections_blocked_total"] == "6"
+    # 默认插入行（无 source）→ 归入 chat 组；无 eval 组行
+    assert "total_requests[chat]" in metrics and "total_requests[eval]" not in metrics
+    assert metrics["total_requests[chat]"] == "3"
+    assert metrics["p50_latency_ms[chat]"] == "200"   # numpy.percentile(50)
+    assert metrics["p95_latency_ms[chat]"] == "290"   # numpy.percentile(95)
+    assert metrics["total_tokens[chat]"] == "90"
+    assert metrics["avg_tokens_per_call[chat]"] == "30.0"
+    assert metrics["cache_hit_rate[chat]"] == "0.6667"    # 2/3
+    assert metrics["refusal_rate[chat]"] == "0.3333"      # 1/3
+    assert metrics["pii_redactions_total[chat]"] == "3"
+    assert metrics["injections_blocked_total[chat]"] == "6"
+
+
+async def _insert_metrics_rows_with_source():
+    """插入 3 行 chat（latency 100/200/300）+ 2 行 eval（latency 50/150）"""
+    db = await get_db()
+    try:
+        for i, (lat, cache_hit, refused, src) in enumerate(
+                [(100, 1, 0, "chat"), (200, 1, 0, "chat"), (300, 0, 1, "chat"),
+                 (50, 0, 0, "eval"), (150, 0, 0, "eval")]):
+            await db.execute(
+                "INSERT INTO request_metrics (request_id, session_id, latency_total, "
+                "token_total, retrieval_mode, cache_hit, refused, pii_redact_count, "
+                "injection_blocked, source) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (f"req-{i}", "s1", lat, 30, "hybrid+rerank",
+                 cache_hit, refused, 1, 2, src))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+def test_report_csv_grouped_by_source():
+    """chat/eval 分开统计：每 metric 拆两行（[chat]/[eval] 后缀），互不污染"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_metrics_rows_with_source())
+
+    r = TestClient(app).get("/report")
+
+    assert r.status_code == 200
+    body = r.text
+    lines = [ln.strip() for ln in body.strip().splitlines() if ln.strip()]
+    assert lines[0] == "metric,value"
+    metrics = dict(ln.split(",") for ln in lines[1:])
+    assert metrics["total_requests[chat]"] == "3"
+    assert metrics["total_requests[eval]"] == "2"
+    # chat 组只算 chat 行（latency 100/200/300）
+    assert metrics["p50_latency_ms[chat]"] == "200"
+    assert metrics["p95_latency_ms[chat]"] == "290"
+    assert metrics["cache_hit_rate[chat]"] == "0.6667"   # 2/3
+    assert metrics["refusal_rate[chat]"] == "0.3333"     # 1/3
+    # eval 组只算 eval 行（latency 50/150，无缓存命中/拒答）
+    assert metrics["p50_latency_ms[eval]"] == "100"
+    assert metrics["p95_latency_ms[eval]"] == "145"
+    assert metrics["total_tokens[eval]"] == "60"
+    assert metrics["cache_hit_rate[eval]"] == "0.0"
+    assert metrics["refusal_rate[eval]"] == "0.0"
 
 
 def test_report_csv_empty_table():
@@ -648,7 +695,7 @@ async def _insert_cache_rows():
 
 
 def test_db_table_rows_and_truncation(tmp_path):
-    """GET /db/table/{name} → columns + rows；超长字段截断 500 字符；limit 钳制"""
+    """GET /db/table/{name} → columns + rows + total；超长字段截断 500 字符；rowid 降序"""
     asyncio.run(init_db())
     asyncio.run(_insert_cache_rows())
 
@@ -659,12 +706,117 @@ def test_db_table_rows_and_truncation(tmp_path):
     assert body["name"] == "cache_entries"
     assert "cache_key" in body["columns"] and "answer" in body["columns"]
     assert len(body["rows"]) == 2
+    assert body["total"] == 2
+    # ORDER BY rowid DESC：后插入的 k2 在前
     row0 = dict(zip(body["columns"], body["rows"][0]))
-    assert row0["cache_key"] == "k1"
-    assert len(row0["answer"]) == 500          # 600 字符 → 截断 500
-    assert row0["answer"] == "x" * 500
+    assert row0["cache_key"] == "k2"
+    assert row0["answer"] == "y"               # 短字段原样
     row1 = dict(zip(body["columns"], body["rows"][1]))
-    assert row1["answer"] == "y"               # 短字段原样
+    assert row1["cache_key"] == "k1"
+    assert len(row1["answer"]) == 500          # 600 字符 → 截断 500
+    assert row1["answer"] == "x" * 500
+
+
+def test_db_table_offset_pagination(tmp_path):
+    """offset 分页：limit=1&offset=1 → 第二行；total 不受分页影响"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_cache_rows())
+
+    r = TestClient(app).get(
+        "/db/table/cache_entries", params={"limit": 1, "offset": 1})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert len(body["rows"]) == 1
+    row = dict(zip(body["columns"], body["rows"][0]))
+    assert row["cache_key"] == "k1"            # 降序 [k2, k1] 的第二条
+
+
+def test_db_table_q_filter(tmp_path):
+    """q 过滤：仅 TEXT 列 LIKE 包含；total=过滤后行数，与分页联动"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_cache_rows())
+
+    r = TestClient(app).get(
+        "/db/table/cache_entries", params={"q": "x"})   # answer "x"*600 匹配
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert len(body["rows"]) == 1
+    row = dict(zip(body["columns"], body["rows"][0]))
+    assert row["cache_key"] == "k1"
+    assert row["query"] == "q"
+
+    r2 = TestClient(app).get(
+        "/db/table/cache_entries", params={"q": "zzz-no-match"})
+    assert r2.json()["total"] == 0
+    assert r2.json()["rows"] == []
+
+
+def test_db_table_q_filter_with_offset(tmp_path):
+    """q + offset 联动：过滤后 total 正确，offset 落在过滤后行序上"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_cache_rows())
+
+    r = TestClient(app).get(
+        "/db/table/cache_entries",
+        params={"q": "q", "limit": 1, "offset": 1})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2                    # query 字段 "q"/"q2" 都含 "q"
+    assert len(body["rows"]) == 1
+    row = dict(zip(body["columns"], body["rows"][0]))
+    assert row["cache_key"] == "k1"              # 降序 [k2, k1] 的 offset=1
+
+
+async def _create_old_metrics_table():
+    """构造旧库 request_metrics（无 source 列）+ 1 行存量数据"""
+    db = await get_db()
+    try:
+        await db.execute("""
+            CREATE TABLE request_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL,
+                session_id TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                latency_total INTEGER, token_total INTEGER,
+                retrieval_mode TEXT, cache_hit BOOLEAN DEFAULT FALSE,
+                refused BOOLEAN DEFAULT FALSE, pii_redact_count INTEGER DEFAULT 0,
+                injection_blocked INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute(
+            "INSERT INTO request_metrics (request_id, latency_total, token_total) "
+            "VALUES ('old-1', 100, 30)")
+        await db.commit()
+    finally:
+        await db.close()
+
+
+def test_metrics_source_column_migration(tmp_path):
+    """旧库迁移：init_db 对无 source 列的表 ALTER 补列；存量行默认 'chat'"""
+    ConfigRegistry.init("config.yaml")
+    ConfigRegistry.override("paths.sqlite", str(tmp_path / "old.db"))
+    asyncio.run(_create_old_metrics_table())
+    asyncio.run(init_db())          # 触发 ALTER 迁移（列已存在则忽略，幂等）
+
+    async def _verify():
+        db = await get_db()
+        try:
+            cur = await db.execute("PRAGMA table_info(request_metrics)")
+            cols = [r["name"] for r in await cur.fetchall()]
+            assert "source" in cols
+            cur = await db.execute(
+                "SELECT source FROM request_metrics WHERE request_id = 'old-1'")
+            row = await cur.fetchone()
+            assert row["source"] == "chat"          # 存量行默认 chat
+        finally:
+            await db.close()
+
+    asyncio.run(_verify())
+
+    # 幂等：再次 init_db 不报错
+    asyncio.run(init_db())
 
 
 def test_db_table_limit_clamped():
