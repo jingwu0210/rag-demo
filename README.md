@@ -4,8 +4,10 @@
 
 ## 快速开始
 
+**唯一外部依赖**：DeepSeek API Key。其余（虚拟环境、Python 依赖、语料生成、模型下载、入库）全部由脚本自举。
+
 ```bash
-# 前提：设置 DeepSeek API Key（用于 LLM 生成）
+# 前提：设置 DeepSeek API Key（用于 LLM 生成与评估 judge）
 export DEEPSEEK_API_KEY=<your-key>
 
 ./run.sh        # 一键启动 (http://localhost:8000)
@@ -14,6 +16,14 @@ export DEEPSEEK_API_KEY=<your-key>
                 # NO_BOOTSTRAP=1 ./run.sh 强制跳过引导
 
 ./eval.sh       # 一键评估（三配置对比 + 报表 → data/eval/results/）
+                # 需先跑过 ./run.sh（venv + 知识库引导）；缺 key/环境/知识库会明确报错
+```
+
+**镜像 override（海外环境可选）**：脚本默认使用国内镜像（HuggingFace `https://hf-mirror.com`、pip 清华源）。海外环境如镜像不可用，可显式覆盖：
+
+```bash
+export HF_ENDPOINT=https://huggingface.co
+export PIP_INDEX_URL=https://pypi.org/simple
 ```
 
 ## API 端点
