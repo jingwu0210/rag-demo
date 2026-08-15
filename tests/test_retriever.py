@@ -97,11 +97,15 @@ def test_build_where_and_clause():
     with tempfile.TemporaryDirectory() as tmp:
         store = _init_store(tmp)
         r = VectorRetriever(store, _mock_embedder())
-        assert r.build_where(None) == {"is_active": True}
+        w = r.build_where(None)
+        # R13: expire 默认开启 → $and[is_active, effective_date $gte cutoff]
+        assert list(w.keys()) == ["$and"]
+        assert {"is_active": True} in w["$and"]
+        assert any("effective_date" in c and "$gte" in c["effective_date"] for c in w["$and"])
         # v1.6: doc_type 关键词层删除 → 任何分类输入都不产生 doc_type 过滤
-        assert r.build_where("general") == {"is_active": True}
-        assert r.build_where("handbook") == {"is_active": True}
-        assert r.build_where("compliance") == {"is_active": True}
+        assert r.build_where("general") == w
+        assert r.build_where("handbook") == w
+        assert r.build_where("compliance") == w
 
 
 # ── 3. VectorRetriever ───────────────────────────────────────
@@ -112,9 +116,9 @@ def test_vector_retriever_doc_type_filter_and_is_active():
     with tempfile.TemporaryDirectory() as tmp:
         store = _init_store(tmp)
         _add_chunks(store, [
-            {"id": "h1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True}},
-            {"id": "h2", "text": "加班与工资计算规则", "metadata": {"doc_type": "handbook", "is_active": True}},
-            {"id": "t1", "text": "API 技术规范文档", "metadata": {"doc_type": "technical", "is_active": True}},
+            {"id": "h1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True, "effective_date": 20991231}},
+            {"id": "h2", "text": "加班与工资计算规则", "metadata": {"doc_type": "handbook", "is_active": True, "effective_date": 20991231}},
+            {"id": "t1", "text": "API 技术规范文档", "metadata": {"doc_type": "technical", "is_active": True, "effective_date": 20991231}},
             {"id": "del", "text": "已废弃文档", "metadata": {"doc_type": "handbook", "is_active": False}},
         ])
         retriever = VectorRetriever(store, _mock_embedder())
@@ -139,9 +143,9 @@ def test_bm25_retriever_hits_chinese_query():
         store = _init_store(tmp)
         _add_chunks(store, [
             {"id": "c1", "text": "员工年假政策：入职满一年可享受五天带薪年假",
-             "metadata": {"doc_type": "handbook", "is_active": True}},
+             "metadata": {"doc_type": "handbook", "is_active": True, "effective_date": 20991231}},
             {"id": "c2", "text": "API 接口调用规范与限流策略",
-             "metadata": {"doc_type": "technical", "is_active": True}},
+             "metadata": {"doc_type": "technical", "is_active": True, "effective_date": 20991231}},
         ])
         retriever = BM25Retriever(store)
         retriever.build_index()
@@ -157,7 +161,7 @@ def test_bm25_retriever_lazy_index_build():
     with tempfile.TemporaryDirectory() as tmp:
         store = _init_store(tmp)
         _add_chunks(store, [
-            {"id": "c1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True}},
+            {"id": "c1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True, "effective_date": 20991231}},
         ])
         retriever = BM25Retriever(store)
         result = retriever.retrieve("年假", top_k=5)  # 不显式 build_index
@@ -198,9 +202,9 @@ def test_hybrid_retriever_rrf_ordering():
         store = _init_store(tmp)
         _add_chunks(store, [
             {"id": "c1", "text": "员工年假政策：入职满一年可享受五天带薪年假",
-             "metadata": {"doc_type": "handbook", "is_active": True}},
+             "metadata": {"doc_type": "handbook", "is_active": True, "effective_date": 20991231}},
             {"id": "c2", "text": "API 接口调用规范与限流策略",
-             "metadata": {"doc_type": "technical", "is_active": True}},
+             "metadata": {"doc_type": "technical", "is_active": True, "effective_date": 20991231}},
         ])
         retriever = HybridRetriever(store, _mock_embedder())
         result = retriever.retrieve("年假")
@@ -235,8 +239,8 @@ def test_hybrid_retriever_empty_bm25_side_uses_vector_only():
         assert retriever.retrieve("年假").docs == []
         # 之后入库：vector 侧可查到，BM25 侧仍为空 → 仅 vector 结果参与 RRF
         _add_chunks(store, [
-            {"id": "h1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True}},
-            {"id": "t1", "text": "API 技术规范文档", "metadata": {"doc_type": "technical", "is_active": True}},
+            {"id": "h1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True, "effective_date": 20991231}},
+            {"id": "t1", "text": "API 技术规范文档", "metadata": {"doc_type": "technical", "is_active": True, "effective_date": 20991231}},
         ])
         result = retriever.retrieve("年假")
         assert result.mode == "hybrid"
@@ -335,9 +339,9 @@ def _p2_hybrid_store(tmpdir):
         embeddings=[[1.0] + [0.0] * 15,
                     [0.6, 0.8] + [0.0] * 14,
                     [0.3, math.sqrt(0.91)] + [0.0] * 14],
-        metadatas=[{"doc_type": "handbook", "is_active": True, "source_file_stem": "a"},
-                   {"doc_type": "technical", "is_active": True, "source_file_stem": "b"},
-                   {"doc_type": "handbook", "is_active": True, "source_file_stem": "f"}],
+        metadatas=[{"doc_type": "handbook", "is_active": True, "effective_date": 20991231, "source_file_stem": "a"},
+                   {"doc_type": "technical", "is_active": True, "effective_date": 20991231, "source_file_stem": "b"},
+                   {"doc_type": "handbook", "is_active": True, "effective_date": 20991231, "source_file_stem": "f"}],
     )
     embedder = MagicMock()
     embedder.encode.return_value = np.array([[1.0] + [0.0] * 15])
@@ -415,7 +419,7 @@ def test_retriever_facade_mode_mapping():
         with tempfile.TemporaryDirectory() as tmp:
             store = _init_store(tmp)
             _add_chunks(store, [
-                {"id": "c1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True}},
+                {"id": "c1", "text": "员工年假政策说明", "metadata": {"doc_type": "handbook", "is_active": True, "effective_date": 20991231}},
             ])
             ConfigRegistry.override("retrieval.mode", mode)
             retriever = Retriever(store, _mock_embedder())
@@ -473,8 +477,8 @@ def test_hybrid_retriever_vector_top1_sim_bypass():
             documents=["年假政策文本", "API 规范文本"],
             embeddings=[[0.9] * 16, [0.1] * 16],
             metadatas=[
-                {"doc_type": "handbook", "is_active": True, "source_file_stem": "h"},
-                {"doc_type": "technical", "is_active": True, "source_file_stem": "t"},
+                {"doc_type": "handbook", "is_active": True, "effective_date": 20991231, "source_file_stem": "h"},
+                {"doc_type": "technical", "is_active": True, "effective_date": 20991231, "source_file_stem": "t"},
             ],
         )
         embedder = MagicMock()
@@ -502,18 +506,19 @@ def test_retriever_facade_skip_adaptive_for_rerank_pool():
         store = ChromaStore()
         # 9 条文档：普通截断（max_chunks=8）和 skip 截断（全 9 条）可区分
         store.add(
-            ids=[f"c{i}" for i in range(9)],
-            documents=[f"文档内容编号 {i} 年假政策规定" for i in range(9)],
-            embeddings=[[0.5] * 16 for _ in range(9)],
+            ids=[f"c{i}" for i in range(14)],
+            documents=[f"文档内容编号 {i} 年假政策规定" for i in range(14)],
+            embeddings=[[0.5] * 16 for _ in range(14)],
             metadatas=[{"doc_type": "handbook", "is_active": True,
-                        "source_file_stem": f"doc{i}"} for i in range(9)],
+                        "effective_date": 20991231,
+                        "source_file_stem": f"doc{i}"} for i in range(14)],
         )
         embedder = MagicMock()
         embedder.encode.return_value = np.array([[0.5] * 16])
         retriever = Retriever(store, embedder)
 
         normal = retriever.retrieve("年假", top_k=20)
-        assert len(normal.docs) <= 8  # AdaptiveK max_chunks 截断
+        assert len(normal.docs) <= 10  # AdaptiveK max_chunks 截断（R13: 8→10）
 
         pooled = retriever.retrieve("年假", top_k=20, skip_adaptive=True)
         assert len(pooled.docs) > len(normal.docs)  # 候选池不截断，更多候选给 rerank

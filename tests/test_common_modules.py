@@ -31,10 +31,20 @@ def test_metadata_filter_get_doc_types_v16_always_empty():
     assert MetadataFilter.get_doc_types("handbook") == []
     assert MetadataFilter.get_doc_types("general") == []
 
-def test_expire_filter_disabled_by_default():
+def test_expire_filter_enabled_by_default():
+    """R13: 过期过滤默认开启（R6 归因：legacy 过期文档排检索第 1 位压过现行标准）"""
     from core.config import ConfigRegistry
     from core.metadata import ExpireFilter
     ConfigRegistry.init("config.yaml")
+    ef = ExpireFilter()
+    assert ef.enabled is True
+    assert ef.get_where_clause() is not None
+
+def test_expire_filter_disabled_returns_none():
+    from core.config import ConfigRegistry
+    from core.metadata import ExpireFilter
+    ConfigRegistry.init("config.yaml")
+    ConfigRegistry.override("retrieval.metadata_filter.expire.enabled", False)
     ef = ExpireFilter()
     assert ef.get_where_clause() is None
 
