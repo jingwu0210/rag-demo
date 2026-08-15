@@ -108,7 +108,7 @@ class OCRPipeline:
         dpi = ConfigRegistry.get("ocr.dpi", 300)
         pix = page.get_pixmap(dpi=dpi)
         # I-3 终审：临时图路径按文档 hash 隔离（可追溯），用后 finally 清理
-        ocr_cache = ConfigRegistry.get("paths.ocr_cache", "data/ocr")
+        ocr_cache = ConfigRegistry.get("paths.ocr_cache", "workspace/ocr")
         img_dir = os.path.join(ocr_cache, doc_tag)
         os.makedirs(img_dir, exist_ok=True)
         img_path = os.path.join(img_dir, f"page_{page_num}.png")

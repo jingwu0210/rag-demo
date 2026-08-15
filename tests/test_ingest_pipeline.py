@@ -70,7 +70,7 @@ def test_hierarchical_chunker_headings_and_context():
         + "后续补充事项。" + "\n"
     )
 
-    doc = ParsedDoc(text=text, pages=[], tables=[], source="data/corpus/handbook.pdf",
+    doc = ParsedDoc(text=text, pages=[], tables=[], source="assets/corpus/handbook.pdf",
                     language="zh")
     chunks = HierarchicalChunker().chunk(doc)
 

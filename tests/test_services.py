@@ -559,7 +559,7 @@ def test_ingest_service_pipeline_order(tmp_path):
         bm25.build_index.side_effect = lambda: calls.append("build_index")
 
         svc = IngestService(chroma_store=store, bm25_retriever=bm25)
-        result = svc.ingest("data/corpus/handbook.pdf", "handbook", "v1.0")
+        result = svc.ingest("assets/corpus/handbook.pdf", "handbook", "v1.0")
 
     assert result.status == "ingested"
     assert result.chunks_created == 2
@@ -594,7 +594,7 @@ def test_ingest_service_commit_skipped(tmp_path):
             version="v1.0", reason="文档内容未变（相同 doc_hash 已入库且 is_active）")
 
         svc = IngestService(chroma_store=store, bm25_retriever=bm25)
-        result = svc.ingest("data/corpus/handbook.pdf", "handbook")
+        result = svc.ingest("assets/corpus/handbook.pdf", "handbook")
 
     assert result.status == "skipped"
     bm25.build_index.assert_called_once()
@@ -614,7 +614,7 @@ def test_ingest_service_check_exists_early_skip(tmp_path):
         versioned_cls.return_value.check_exists.return_value = True
 
         svc = IngestService(chroma_store=store, bm25_retriever=bm25)
-        result = svc.ingest("data/corpus/handbook.pdf", "handbook")
+        result = svc.ingest("assets/corpus/handbook.pdf", "handbook")
 
     assert result.status == "skipped"
     assert result.reason

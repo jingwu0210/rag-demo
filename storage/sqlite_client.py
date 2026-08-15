@@ -2,7 +2,7 @@ import aiosqlite
 from core.config import ConfigRegistry
 
 async def get_db() -> aiosqlite.Connection:
-    db_path = ConfigRegistry.get("paths.sqlite", "data/cache.db")
+    db_path = ConfigRegistry.get("paths.sqlite", "workspace/cache.db")
     db = await aiosqlite.connect(db_path)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")

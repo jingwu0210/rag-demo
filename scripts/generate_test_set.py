@@ -1,7 +1,7 @@
 """QA 测试集生成：DeepSeek API 基于语料生成初稿 → 人工 review 后固化。
 
 用法: DEEPSEEK_API_KEY=sk-xxx .venv/bin/python scripts/generate_test_set.py
-输出: data/eval/test_set.json（LLM 初稿）；人工修正后覆盖同名文件
+输出: assets/testsets/test_set.json（LLM 初稿）；人工修正后覆盖同名文件
 """
 import asyncio
 import hashlib
@@ -17,7 +17,7 @@ API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 BASE_URL = "https://api.deepseek.com/v1"
 MODEL = "deepseek-chat"
 
-# 语料 ground truth 摘要（人工编写，基于 data/corpus 10 文档的实际内容）
+# 语料 ground truth 摘要（人工编写，基于 assets/corpus 10 文档的实际内容）
 CORPUS_SUMMARY = {
     "handbook": """员工手册 v1.1（当前生效）:
 - 年假: 司龄 1-3 年 10 天 / 3-5 年 12 天 / 5 年以上 15 天；当年 12 月 31 日前用完
@@ -142,7 +142,7 @@ async def main():
                 print(f"{domain}: 生成失败 {e}")
 
     qa = add_out_of_scope(all_qa)
-    out_path = "data/eval/test_set.json"
+    out_path = "assets/testsets/test_set.json"
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(qa, f, ensure_ascii=False, indent=2)

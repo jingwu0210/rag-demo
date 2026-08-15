@@ -9,7 +9,7 @@
   .venv/bin/python scripts/inspect_db.py metrics                  # 请求指标（最近 20 条）
   .venv/bin/python scripts/inspect_db.py turns --session <id>     # 对话轮次
 
-数据位置: data/cache.db
+数据位置: workspace/cache.db
   - eval_history: 每 (run_id, config_name) 一行 = 一次评估一个配置的聚合指标；
     per_qa_results_json 列 = 该配置下每条 QA 的明细（JSON 数组）
   - ingest_log: 每次文档入库一行（status = ingested/replaced/skipped）
@@ -21,7 +21,7 @@ import json
 import sqlite3
 import sys
 
-DB = "data/cache.db"
+DB = "workspace/cache.db"
 
 
 def _rows(run_id: str = None):

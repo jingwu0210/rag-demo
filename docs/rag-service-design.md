@@ -94,7 +94,8 @@
 | v1.11 | 2026-08-15 | P1h 双通道 RRF 二次融合（修复 rerank 排序失真）：rerank 后 final = 1/(k+粗排位次) + 1/(k+rerank位次)，精排不独裁（rrf_k 与粗排融合共用 retrieval.fusion.rrf_k）；Reranker.rerank 增加 top_n 参数（不传=config 截断 / 显式 None=全量供融合取位次 / N=截断）；依据 R4 失真证据（API Spec -78%、休假制度 -49%、通用章节 +36%），见 §4.4 |
 | v1.12 | 2026-08-15 | P2 hybrid 融合噪声过滤：RRF 加权（vector_weight 1.0 / bm25_weight 0.8 软降权）+ 融合后 vec_sim ≥ 0.45 硬过滤（纯 BM25 命中视为 0 被滤，过滤在 AdaptiveK 之前，rerank 粗排池同样受益；vector_top1_sim 旁路语义不变）。实测依据：术语类 17 条答案依据 chunk 余弦全部 ≥0.4781 零误杀（铁律 6 验证），见 §4.3 ①.1 |
 | v1.13 | 2026-08-15 | P4 分层指标报表（oos_refusal_rate / normal_refusal_rate / 未作答三类分解，CSV 15→17 列）；测试集 v2（80 条 = 原 65 条 + 三类区分度样本 15 条，多义词类语料不支持不硬造）；发现 R4 时 chroma HNSW 索引未完整落盘（与元数据不同步，挂账观察） |
-| v1.14 | 2026-08-15 | 一键交付契约：唯一外部依赖 = DeepSeek API Key。run.sh/eval.sh 增加 key 前置检查（缺失明确报错）、HF_ENDPOINT/PIP_INDEX_URL 镜像兜底（默认国内镜像、环境变量可 override）、**代理兼容（镜像域名 NO_PROXY 绕过系统代理，DeepSeek API 仍走用户代理）**、**空库引导双路（data/corpus/ 已有用户文档 → 直接入库用户语料不生成演示语料；无用户文档 → 生成演示语料）**、eval.sh 增加 venv/知识库前置检查；测试集默认切换 v2；日志 JSONRenderer ensure_ascii=False（中文直接可读，与字段字典样例一致）；R5 实测闭环 max_workers 5 的 MPS 无退化假设 |
+| v1.14 | 2026-08-15 | 一键交付契约：唯一外部依赖 = DeepSeek API Key。run.sh/eval.sh 增加 key 前置检查（缺失明确报错）、HF_ENDPOINT/PIP_INDEX_URL 镜像兜底（默认国内镜像、环境变量可 override）、**代理兼容（镜像域名 NO_PROXY 绕过系统代理，DeepSeek API 仍走用户代理）**、**空库引导双路（assets/corpus/ 已有用户文档 → 直接入库用户语料不生成演示语料；无用户文档 → 生成演示语料）**、eval.sh 增加 venv/知识库前置检查；测试集默认切换 v2；日志 JSONRenderer ensure_ascii=False（中文直接可读，与字段字典样例一致）；R5 实测闭环 max_workers 5 的 MPS 无退化假设 |
+| v1.15 | 2026-08-15 | 目录分层重构（assets/workspace）：assets = 版本化资产进 git（corpus 语料源 / testsets 测试集 / chroma 预置向量索引）；workspace = 机器状态忽略（ocr / logs / results / cache.db）。config paths 段全改，代码/脚本/文档全部引用点同步（铁律 8） |
 
 ---
 
@@ -1975,7 +1976,7 @@ Collection: knowledge_base
 #### SQLite（缓存 + 指标 + 会话 + 评估历史）
 
 ```
-文件: data/cache.db
+文件: workspace/cache.db
 
 表:
   - cache_entries       # L1 精确匹配缓存
@@ -2285,7 +2286,7 @@ pii_redact_total, injection_blocked_total
 
 - **计算公式**：`Refusal Appropriateness = 正确处理样本数 / 总测试样本数`
 - **评测集要求**：混入 20% out-of-scope 问题 + 三类区分度样本（v1.4 测试集 65 条含 12 条 OOS）：
-- **测试集 v2（v1.13，80 条）**：`data/eval/test_set_v2.json` = 原 65 条逐字节保留 + 15 条新增三类区分度样本（多数字条款 5 / 中英混合 5 / 长复杂政策 5）。多义词类经语料盘点**不支持**（语料无真正双义实例，不硬造——避免无法回答样本）。**v2 为默认测试集**（config `eval.test_set_path` 指向 v2）；回退 v1 用 override；before/after 对比因 test_set_hash 变化，按 65 条公共问题子集（per_qa question 交集）重算，对比口径在 eval-history 注明：
+- **测试集 v2（v1.13，80 条）**：`assets/testsets/test_set_v2.json` = 原 65 条逐字节保留 + 15 条新增三类区分度样本（多数字条款 5 / 中英混合 5 / 长复杂政策 5）。多义词类经语料盘点**不支持**（语料无真正双义实例，不硬造——避免无法回答样本）。**v2 为默认测试集**（config `eval.test_set_path` 指向 v2）；回退 v1 用 override；before/after 对比因 test_set_hash 变化，按 65 条公共问题子集（per_qa question 交集）重算，对比口径在 eval-history 注明：
   - **精确术语类**（ISO 27001/429/SEV-1 等）— 发挥 BM25 优势，否则测试集对 hybrid 不公平
   - **复杂多跳类**（需多 chunk 拼合）— 让 Faithfulness 对检索完整性敏感
   - **边界模糊类**（关键词误伤/safety 边界/半相关）— 让 Refusal 指标有区分度
@@ -2382,8 +2383,8 @@ def run_comparison():
 set -e
 # 前置检查：key → venv/知识库 → HF 镜像兜底 → 运行评估
 # 实际实现以仓库 eval.sh 为准（上文为行为契约摘要）
-.venv/bin/python -m eval.runner --output data/eval/results/ \
-    > "data/logs/eval-$(date +%Y%m%d_%H%M%S).log" 2> ...stderr.log
+.venv/bin/python -m eval.runner --output workspace/results/ \
+    > "workspace/logs/eval-$(date +%Y%m%d_%H%M%S).log" 2> ...stderr.log
 ```
 
 #### Bad Case 自动采集
@@ -2436,7 +2437,7 @@ Assignment 明确要求 "before/after 优化对比" 和 "优化指标提升 ≥ 
 **数据表**：
 
 ```sql
--- SQLite 新增表（data/cache.db）
+-- SQLite 新增表（workspace/cache.db）
 CREATE TABLE eval_history (
     run_id          TEXT PRIMARY KEY,          -- UUID
     config_name     TEXT NOT NULL,             -- vector-only | hybrid | hybrid+rerank
@@ -2526,7 +2527,7 @@ python -m eval.report --compare <run_id_before> <run_id_after>
 | 层 | 权威性 | 命名/生命周期 | 保护 |
 |----|--------|--------------|------|
 | **eval_history（DB）** | 权威数据源 — `compare_runs` 的唯一输入，per_qa 明细所在 | 每 (run_id, config_name) 一行，永不覆盖 | 铁律 10：禁止 rm 数据库文件；清缓存走 CacheManager.invalidate_all() |
-| **报表文件** | 人类可读快照（非权威） | `eval_report-<ts>.csv/md` 带时间戳归档，历史互相不覆盖；`eval_report.csv/md` 仅作最新副本（覆盖允许） | git-ignored（data/eval/results/），权威数据在 DB |
+| **报表文件** | 人类可读快照（非权威） | `eval_report-<ts>.csv/md` 带时间戳归档，历史互相不覆盖；`eval_report.csv/md` 仅作最新副本（覆盖允许） | git-ignored（workspace/results/），权威数据在 DB |
 | **评估档案** | 交付物归档（before/after 数据链） | `docs/eval-history.md`，每轮评估后追加：测试集版本、修复状态、完整指标表、对比结论、数据完整性声明 | 入库（git），交付物之一 |
 
 **设计教训（v1.5 补记）**：报表文件的固定名覆盖问题在 v1.0-v1.4 设计文档中从未定义 — 报表是实施引入的设计外产物，其生命周期无设计背书，导致三轮评估互相覆盖。v1.5 起所有"实施引入的新输出物"必须在本节登记生命周期。
@@ -2818,8 +2819,8 @@ python -m api.app
 
 # eval.sh — 一键评估
 #!/bin/bash
-python -m eval.runner --output data/eval/results/
-echo "评估完成: data/eval/results/report.csv"
+python -m eval.runner --output workspace/results/
+echo "评估完成: workspace/results/report.csv"
 ```
 
 ---
@@ -2885,7 +2886,7 @@ echo "评估完成: data/eval/results/report.csv"
 
 ### 10.2 结构化日志样例
 
-> 真实样例（R4 评估日志 data/logs/eval-20260813_201235.log，字段定义以 docs/log-field-dictionary.md 为唯一权威）。格式：头部四字段平铺（timestamp → level → event → module）+ 业务数据分组嵌套。
+> 真实样例（R4 评估日志 workspace/logs/eval-20260813_201235.log，字段定义以 docs/log-field-dictionary.md 为唯一权威）。格式：头部四字段平铺（timestamp → level → event → module）+ 业务数据分组嵌套。
 
 ```json
 {"timestamp": "2026-08-13T12:12:47.404Z", "level": "info", "event": "retrieval_complete", "module": "retrieval",

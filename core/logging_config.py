@@ -15,7 +15,7 @@ def _reorder_fields(logger, method_name, event_dict):
 
 def setup_logging() -> None:
     log_level = ConfigRegistry.get("logging.level", "INFO")
-    log_dir = ConfigRegistry.get("logging.log_dir", "data/logs")
+    log_dir = ConfigRegistry.get("logging.log_dir", "workspace/logs")
 
     processors = [
         structlog.contextvars.merge_contextvars,   # 支持 API 层 request_id 上下文注入

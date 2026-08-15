@@ -1,14 +1,14 @@
 """语料入库脚本：自动扫描 corpus 目录增量 ingest（支持单文件与安全 wipe 重灌）。
 
 用法:
-  # 增量（默认）: 扫描 data/corpus/ 所有文件
+  # 增量（默认）: 扫描 assets/corpus/ 所有文件
   #   新文件 → ingested；已有文件 → skipped（hash 相同，零开销）
   #   同 doc_group 新版本 → replaced（旧版软下线）
   HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py
 
   # 单文件增量（新文档无需改本脚本）
   HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py \
-      --file data/corpus/new_policy.pdf --doc-type handbook --version v1.0
+      --file assets/corpus/new_policy.pdf --doc-type handbook --version v1.0
 
   # 安全 wipe 重灌（格式/参数/模型变更时使用）:
   #   SQLite 表 DELETE（非 rm 文件）+ ChromaDB 集合删除重建 + 数据备份
@@ -54,8 +54,8 @@ def wipe_safely():
 
     禁止 rm 数据库文件 — cache.db 是混合库（缓存+评估历史+指标+对话）。
     """
-    sqlite_path = ConfigRegistry.get("paths.sqlite", "data/cache.db")
-    chroma_dir = ConfigRegistry.get("chromadb.persist_directory", "data/chroma")
+    sqlite_path = ConfigRegistry.get("paths.sqlite", "workspace/cache.db")
+    chroma_dir = ConfigRegistry.get("chromadb.persist_directory", "assets/chroma")
 
     # 1. 备份
     backup_dir = "data/backup"
@@ -134,7 +134,7 @@ def main():
         wipe_safely()
 
     svc = IngestService()
-    corpus_dir = ConfigRegistry.get("paths.corpus", "data/corpus")
+    corpus_dir = ConfigRegistry.get("paths.corpus", "assets/corpus")
 
     if args.file:
         fpath = args.file

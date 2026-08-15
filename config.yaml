@@ -164,7 +164,7 @@ conversation:
 
 # ── 向量数据库 ────────────────────────────────────────────
 chromadb:
-  persist_directory: data/chroma
+  persist_directory: assets/chroma
   collection_name: knowledge_base
   distance_metric: cosine
 
@@ -198,7 +198,7 @@ logging:
 
 # ── 评估 ──────────────────────────────────────────────────
 eval:
-  test_set_path: data/eval/test_set_v2.json  # v1.13 起默认 80 条 v2 测试集
+  test_set_path: assets/testsets/test_set_v2.json  # v1.13 起默认 80 条 v2 测试集
                                              # （条数以测试集文件自决；回退 65 条 v1
                                              # 用 override 指向 test_set.json，
                                              # 但对比需按公共子集口径）
@@ -222,11 +222,11 @@ eval:
   concurrency: 5                   # 评估并发度（问答并发 + judge 并发，v1.7）
   result_dir: data/eval/results
 
-# ── 存储路径 ──────────────────────────────────────────────
+# ── 存储路径（v1.15 分层：assets = 版本化资产进 git；workspace = 机器状态忽略）──
 paths:
-  corpus: data/corpus
-  ocr_cache: data/ocr
-  chroma: data/chroma
-  logs: data/logs
-  eval_results: data/eval/results
-  sqlite: data/cache.db
+  corpus: assets/corpus
+  ocr_cache: workspace/ocr
+  chroma: assets/chroma
+  logs: workspace/logs
+  eval_results: workspace/results
+  sqlite: workspace/cache.db
