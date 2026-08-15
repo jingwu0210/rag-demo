@@ -107,9 +107,20 @@ class ChatService:
         injection_blocked = retrieval_output.injection_blocked if retrieval_output else 0
         retrieval_timeout = bool(getattr(retrieval_output, "retrieval_timeout", False))
 
-        # 6. 拒答预检：由 PostProcessor 内部执行（第 8 步），此处跳过
+        # 6. 拒答预检（生成前）：RefusalCheck 只依赖 query + 检索结果，两者在生成前
+        # 都已就绪。提前到生成前，避免对注定拒答的样本浪费一次生成 LLM 调用
+        # （实测 14/110 样本被 RefusalCheck 拒答、答案却已生成又被丢弃）。
+        refused = False
+        refusal_reason = None
+        refusal_template = None
+        if not retrieval_timeout:
+            pre = self.postprocessor.pre_refuse(
+                query, retrieval_output, mode=getattr(retrieval_output, "mode", None))
+            if pre is not None:
+                refused = True
+                refusal_reason, refusal_template = pre
 
-        # 7. 生成（阶段超时 → 降级话术 + partial）
+        # 7. 生成（阶段超时 → 降级话术 + partial；拒答样本跳过生成）
         partial = False
         gen_result = None
         if retrieval_timeout:
@@ -119,7 +130,7 @@ class ChatService:
             timeout = True
             partial = True
             logger.warning("chat_retrieval_timeout", query=query)
-        else:
+        elif not refused:
             ctx = PromptContext(question=query, documents=docs, history=history, summary=summary)
             try:
                 gen_result = await self.guard.with_stage_timeout(
@@ -129,14 +140,22 @@ class ChatService:
                 partial = True
                 logger.warning("chat_generation_timeout", query=query)
 
-        # 8. 后处理（生成超时的系统降级话术不经过拒答/脱敏）
-        if gen_result is not None:
-            pp = self.postprocessor.process(gen_result.text, query, retrieval_output,
-                                            mode=getattr(retrieval_output, "mode", None))
-            answer = pp.answer
-            refused = pp.refused
-            refusal_reason = pp.refusal_reason
-            pii_redact_count = pp.pii_redact_count
+        # 8. 后处理（拒答样本直接返回话术；生成超时的系统降级话术不经过脱敏）
+        if refused:
+            answer = refusal_template
+            pii_redact_count = 0
+            tokens = {}
+            # L2 埋点: refusal_triggered
+            logger.info("refusal_triggered",
+                        request={"id": rid},
+                        refusal={
+                            "reason": refusal_reason,
+                            "signal": (round(float(retrieval_output.vector_top1_sim), 4)
+                                       if retrieval_output and retrieval_output.vector_top1_sim is not None
+                                       else (round(float(docs[0].score), 4) if docs else None)),
+                        })
+        elif gen_result is not None:
+            answer, pii_redact_count = self.postprocessor.scrub(gen_result.text)
             tokens = {
                 "prompt": gen_result.token_prompt,
                 "completion": gen_result.token_completion,
@@ -158,17 +177,6 @@ class ChatService:
                             "truncated": len(answer) > 200,
                             "length": len(answer),
                         })
-
-            # L2 埋点: refusal_triggered（仅拒答时）
-            if refused:
-                logger.info("refusal_triggered",
-                            request={"id": rid},
-                            refusal={
-                                "reason": refusal_reason,
-                                "signal": (round(float(retrieval_output.vector_top1_sim), 4)
-                                           if retrieval_output and retrieval_output.vector_top1_sim is not None
-                                           else (round(float(docs[0].score), 4) if docs else None)),
-                            })
 
             # L2 埋点: pii_redacted（仅脱敏触发时）
             if pii_redact_count > 0:

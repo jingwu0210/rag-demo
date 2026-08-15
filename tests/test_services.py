@@ -327,6 +327,14 @@ def _chat_svc(tmp_path, *, cache_hit=False, cache_enabled=True, gen_exc=None,
     if pp_result is None:
         pp_result = PostProcessResult(answer="根据《员工手册》规定，年假为 10 天。")
     postprocessor.process = MagicMock(return_value=pp_result)
+    # 新流程：chat.py 用 pre_refuse（生成前拒答预检）+ scrub（生成后脱敏）
+    if getattr(pp_result, "refused", False):
+        postprocessor.pre_refuse = MagicMock(
+            return_value=(pp_result.refusal_reason or "low_confidence", pp_result.answer))
+    else:
+        postprocessor.pre_refuse = MagicMock(return_value=None)
+    postprocessor.scrub = MagicMock(
+        return_value=(pp_result.answer, getattr(pp_result, "pii_redact_count", 0)))
 
     cache = MagicMock()
     if cache_hit:
