@@ -43,7 +43,7 @@ class _OpenAICompatAdapter(BaseLLMAdapter):
         # api_key 显式传入优先；否则从环境变量读取，不硬编码密钥
         self.api_key = api_key or os.environ.get(api_key_env, "")
         self.base_url = ConfigRegistry.get("llm.base_url", "https://api.deepseek.com/v1")
-        self.model = ConfigRegistry.get("llm.model", "deepseek-chat")
+        self.model = ConfigRegistry.get("llm.model", "deepseek-v4-flash")
         self.temperature = ConfigRegistry.get("llm.temperature", 0.1)
         self.max_tokens = ConfigRegistry.get("llm.max_tokens", 1024)
         self.timeout = ConfigRegistry.get("llm.timeout", 5)

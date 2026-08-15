@@ -540,7 +540,7 @@ eval.sh（自动化，~1 分钟）
           PromptBuilder.build → XML 沙箱化 + system prompt + 对话历史 + query
               │
               ▼
-          Generator.generate → LLM API (DeepSeek Flash 默认)
+          Generator.generate → LLM API (DeepSeek v4 Flash 默认)
               │  受 ResilienceGuard.stage_timeout("generation", 5s) 保护
               ▼
           PostProcessor.process
@@ -2654,7 +2654,7 @@ python -m eval.report --compare <run_id_before> <run_id_after>
 
 | Provider | 模型 | 输入 ¥/M | 输出 ¥/M | 首 token 延迟 | 上下文 |
 |------|------|:---:|:---:|:---:|:---:|
-| **DeepSeek** ✅ | deepseek-chat (Flash) | 1.00 | 2.00 | ~0.3s | 128K |
+| **DeepSeek** ✅ | deepseek-v4-flash | 1.00 | 2.00 | ~0.3s | 128K |
 | 通义千问 | qwen-turbo | 0.80 | 2.00 | ~0.5s | 128K |
 | 智谱 | glm-4-flash | 0.10 | 0.10 | ~0.8s | 128K |
 
@@ -2662,11 +2662,11 @@ python -m eval.report --compare <run_id_before> <run_id_after>
 
 | Provider | 千次成本 |
 |------|:---:|
-| DeepSeek Flash | ¥2.30 |
+| DeepSeek v4 Flash | ¥2.30 |
 | 通义千问 Turbo | ¥2.00 |
 | 智谱 GLM-4-Flash | ¥0.19 |
 
-**选择**: DeepSeek Flash（默认）— 延迟最低（10s 硬约束安全边际最大）、128K 窗口；通义千问 Turbo（备选 1）— 中文最佳；智谱 GLM-4-Flash（备选 2）— cost optimization 案例。评估报告将产出三者的 quality / latency / cost 对比。
+**选择**: DeepSeek v4 Flash（默认）— 延迟最低（10s 硬约束安全边际最大）、128K 窗口；通义千问 Turbo（备选 1）— 中文最佳；智谱 GLM-4-Flash（备选 2）— cost optimization 案例。评估报告将产出三者的 quality / latency / cost 对比。
 
 ---
 
@@ -2902,7 +2902,7 @@ echo "评估完成: workspace/results/report.csv"
 
 {"timestamp": "2026-08-13T12:12:48.264Z", "level": "info", "event": "generation_complete", "module": "chat",
  "request": {"id": null},
- "llm": {"provider": "deepseek", "model": "deepseek-chat",
+ "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
          "tokens_prompt": 1535, "tokens_completion": 27, "latency_ms": 786},
  "answer": {"preview": "根据《员工手册》第一章休假制度，员工请病假须提供**二级甲等以上医院**出具的病假证明。",
             "truncated": false, "length": 44}}
