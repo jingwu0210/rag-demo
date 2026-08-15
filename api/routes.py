@@ -509,19 +509,40 @@ def _truncate_cell(v):
     return v
 
 
+def _source_filter_sql(info, source: Optional[str]):
+    """构建 source 等值过滤 SQL：(where_sql, params)。
+
+    与 db_table 的 source 过滤逻辑一致：仅含 source 列的表生效（参数化等值匹配，
+    无注入风险）；无 source 列的表（cache_entries/sessions/ingest_log 等）忽略 → 返回全部。
+    """
+    if not source or not any(r["name"] == "source" for r in info):
+        return "", []
+    return " WHERE source = ?", [source]
+
+
 @router.get("/db/tables")
-async def db_tables():
-    """表清单：{tables: [{name, rows}, ...]}（rows=行数；表缺失视为 0，不中断）"""
+async def db_tables(source: Optional[str] = None):
+    """表清单：{tables: [{name, rows, has_source}, ...]}（rows=行数；表缺失视为 0，不中断）。
+
+    source（可选）：'chat'/'eval'，仅对含 source 列的表（request_metrics / turns）按 source
+    等值过滤统计行数；无 source 列的表（cache_entries/eval_history/sessions/ingest_log）
+    忽略该参数返回全表行数（"全部"视角）。has_source 供前端判断"行数不分来源"的弱化提示。"""
     db = await get_db()
     try:
         tables = []
         for name in _DB_TABLES:
             try:
-                cur = await db.execute(f"SELECT COUNT(*) AS n FROM {name}")
+                cur = await db.execute(f"PRAGMA table_info({name})")
+                info = await cur.fetchall()
+                has_source = any(r["name"] == "source" for r in info)
+                where_sql, params = _source_filter_sql(info, source)
+                cur = await db.execute(
+                    f"SELECT COUNT(*) AS n FROM {name}{where_sql}", params)
                 row = await cur.fetchone()
-                tables.append({"name": name, "rows": int(row["n"])})
+                tables.append({"name": name, "rows": int(row["n"]),
+                               "has_source": has_source})
             except Exception:
-                tables.append({"name": name, "rows": 0})
+                tables.append({"name": name, "rows": 0, "has_source": False})
         return {"tables": tables}
     finally:
         await db.close()
