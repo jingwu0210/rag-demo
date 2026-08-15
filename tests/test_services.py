@@ -394,6 +394,7 @@ def test_chat_service_full_flow(tmp_path):
     assert m["latency_generation"] == 50
     assert m["refused"] == 0 and m["timeout"] == 0 and m["degraded"] == 0
     assert m["pii_redact_count"] == 0 and m["injection_blocked"] == 0
+    assert m["source"] == "chat"                  # 默认调用方 = chat 对话
 
     sessions = asyncio.run(_fetch_sessions())
     assert len(sessions) == 1
@@ -433,6 +434,19 @@ def test_chat_service_cache_hit_writes_metrics(tmp_path):
     assert m["latency_total"] >= 0                  # 实际命中耗时
     assert m["latency_retrieval"] == 0 and m["latency_generation"] == 0
     assert m["refused"] == 0 and m["timeout"] == 0 and m["degraded"] == 0
+    assert m["source"] == "chat"                    # 缓存命中路径同样带 source
+
+
+def test_chat_service_source_eval(tmp_path):
+    """source="eval"（评估跑批）→ request_metrics.source='eval'，与 chat 对话区分"""
+    svc, deps = _chat_svc(tmp_path)
+
+    resp = asyncio.run(svc.process("年假有几天？", None, source="eval"))
+
+    assert resp.answer == "根据《员工手册》规定，年假为 10 天。"
+    metrics = asyncio.run(_fetch_metrics())
+    assert len(metrics) == 1
+    assert metrics[0]["source"] == "eval"
 
 
 def test_chat_service_generation_timeout_partial(tmp_path):

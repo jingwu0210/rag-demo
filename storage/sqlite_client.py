@@ -37,9 +37,16 @@ async def init_db() -> None:
             refused BOOLEAN DEFAULT FALSE, refusal_reason TEXT,
             timeout BOOLEAN DEFAULT FALSE, degraded BOOLEAN DEFAULT FALSE, error TEXT,
             pii_redact_count INTEGER DEFAULT 0, injection_blocked INTEGER DEFAULT 0,
-            faithfulness_score REAL, context_precision REAL, answer_compliance REAL
+            faithfulness_score REAL, context_precision REAL, answer_compliance REAL,
+            source TEXT DEFAULT 'chat'
         )
     """)
+    # 迁移：旧库（无 source 列）补列 — 存量行默认 'chat'（chat/eval 分组报表依赖），幂等
+    try:
+        await db.execute(
+            "ALTER TABLE request_metrics ADD COLUMN source TEXT DEFAULT 'chat'")
+    except Exception:
+        pass  # 列已存在（新库 CREATE 已含）
     await db.execute("CREATE INDEX IF NOT EXISTS idx_metrics_ts ON request_metrics(timestamp)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_metrics_mode ON request_metrics(retrieval_mode)")
 

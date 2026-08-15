@@ -384,9 +384,9 @@ def test_hybrid_retriever_consumes_vec_sim_threshold():
         ConfigRegistry.override("retrieval.fusion.vector_sim_threshold", 0.0)
         all_kept = retriever.retrieve("年假", top_k=10)
         assert {d.chunk_id for d in all_kept.docs} == {"c_a", "c_b", "c_filler"}
-        # 阈值 1.1 → 全滤（1.0 < 1.1）→ 空结果
+        # 阈值 1.1 → 向量路全滤，但 P2d 豁免 c_b（BM25 rank1 真命中）保留
         ConfigRegistry.override("retrieval.fusion.vector_sim_threshold", 1.1)
-        assert retriever.retrieve("年假", top_k=10).docs == []
+        assert {d.chunk_id for d in retriever.retrieve("年假", top_k=10).docs} == {"c_b"}
         # skip_adaptive（rerank 粗排池）走同一过滤路径 — 候选池更干净
         ConfigRegistry.override("retrieval.fusion.vector_sim_threshold", 0.45)
         pool = retriever.retrieve("年假", top_k=10, skip_adaptive=True)
@@ -411,6 +411,50 @@ def test_hybrid_pure_bm25_hit_without_vec_sim_is_filtered():
 
 
 # ── 6. Retriever 门面 ────────────────────────────────────────
+
+
+# ── P2d: BM25 强命中豁免（R7 残余 #5：口语短问句向量分崩但 BM25 精确命中）──
+
+def _p2d_docs():
+    from core.retriever import ScoredDoc
+    return [
+        ScoredDoc(chunk_id="a", text="年假 15 天", score=0.03, vec_sim=0.236, bm25_rank=1),
+        ScoredDoc(chunk_id="b", text="无关文档 B", score=0.02, vec_sim=0.200, bm25_rank=5),
+        ScoredDoc(chunk_id="c", text="纯向量低分", score=0.01, vec_sim=0.300, bm25_rank=None),
+    ]
+
+
+def test_p2d_bm25_strong_hit_exempts_filter():
+    """BM25 rank=1 + vec_sim=0.236（<0.45）→ 豁免保留（口语短问句修复）"""
+    from core.retriever import apply_vec_sim_filter
+    kept = apply_vec_sim_filter(_p2d_docs(), 0.45, bm25_exempt_rank=3)
+    assert [d.chunk_id for d in kept] == ["a"]
+
+
+def test_p2d_bm25_weak_hit_still_filtered():
+    """BM25 rank=5（>3）+ vec_sim=0.2 → 仍被滤（噪声防护保留）"""
+    from core.retriever import apply_vec_sim_filter
+    kept = apply_vec_sim_filter(_p2d_docs(), 0.45, bm25_exempt_rank=3)
+    assert "b" not in [d.chunk_id for d in kept]
+
+
+def test_p2d_pure_vector_low_score_still_filtered():
+    """纯向量命中（bm25_rank=None）+ vec_sim<0.45 → 仍被滤"""
+    from core.retriever import apply_vec_sim_filter
+    kept = apply_vec_sim_filter(_p2d_docs(), 0.45, bm25_exempt_rank=3)
+    assert "c" not in [d.chunk_id for d in kept]
+
+
+def test_p2d_config_key_consumed():
+    """config bm25_exempt_rank 有消费者：override 后豁免边界变化"""
+    from core.config import ConfigRegistry
+    from core.retriever import apply_vec_sim_filter
+    ConfigRegistry.init("config.yaml")
+    docs = _p2d_docs()
+    kept3 = apply_vec_sim_filter(docs, 0.45, 3)
+    kept5 = apply_vec_sim_filter(docs, 0.45, 5)
+    assert [d.chunk_id for d in kept3] == ["a"]
+    assert [d.chunk_id for d in kept5] == ["a", "b"]  # rank=5 纳入豁免
 
 def test_retriever_facade_mode_mapping():
     from core.retriever import Retriever

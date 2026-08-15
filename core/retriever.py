@@ -26,6 +26,8 @@ class ScoredDoc:
     metadata: Dict[str, Any] = field(default_factory=dict)
     # P2c: 融合时携带的向量路余弦分（0-1，有绝对语义）；纯 BM25 命中为 None
     vec_sim: Optional[float] = None
+    # P2d: BM25 路排名（1-based）；BM25 未命中为 None（强命中豁免过滤用）
+    bm25_rank: Optional[int] = None
 
 
 @dataclass
@@ -75,18 +77,25 @@ class AdaptiveK:
         return kept
 
 
-def apply_vec_sim_filter(docs: List[ScoredDoc], threshold: Optional[float]) -> List[ScoredDoc]:
-    """P2c: 融合后按 vec_sim 硬过滤（兜底，发生在 AdaptiveK 之前）
+def apply_vec_sim_filter(docs: List[ScoredDoc], threshold: Optional[float],
+                         bm25_exempt_rank: int = 3) -> List[ScoredDoc]:
+    """P2c+P2d: 融合后按 vec_sim 硬过滤（兜底，发生在 AdaptiveK 之前）
 
     纯 BM25 命中（vec_sim=None）视为 0 被滤 — 这正是过滤目标：
     BM25 独中但向量不相关的噪声。threshold=None 时不过滤（关闭过滤）。
     实测依据：R4 术语类 17 条（ISO 27001/429/SEV/VPN 等）答案依据 chunk
     与 query 余弦全部 ≥0.4781，0.45 阈值零误杀；普通中文样本全部 >0.45。
+
+    P2d 豁免（R7 残余 #5）：口语短问句向量分崩（实测"公司年假有几天"
+    top1=0.236）但 BM25 精确命中——bm25_rank ≤ bm25_exempt_rank 的强命中
+    豁免过滤；rank 靠后的 BM25 噪声仍被拦截。
     """
     if threshold is None:
         return docs
     return [d for d in docs
-            if (d.vec_sim if d.vec_sim is not None else 0.0) >= threshold]
+            if (d.vec_sim if d.vec_sim is not None else 0.0) >= threshold
+            or (getattr(d, "bm25_rank", None) is not None
+                and d.bm25_rank <= bm25_exempt_rank)]
 
 
 class BaseRetriever(ABC):
@@ -232,11 +241,14 @@ class HybridRetriever(BaseRetriever):
                                bm25_weight=bm25_weight)
         scored = [ScoredDoc(chunk_id=d["chunk_id"], text=d["text"],
                             score=d["rrf_score"], metadata=d.get("metadata", {}),
-                            vec_sim=d.get("vec_sim"))
+                            vec_sim=d.get("vec_sim"), bm25_rank=d.get("bm25_rank"))
                   for d in fused]
-        # P2c: 融合后 vec_sim 硬过滤（发生在 AdaptiveK 之前；skip_adaptive
-        # 的 rerank 粗排池走同一路径，候选池同样更干净）
-        scored = apply_vec_sim_filter(scored, vec_sim_threshold)[:top_k]
+        # P2c+P2d: 融合后 vec_sim 硬过滤（发生在 AdaptiveK 之前；skip_adaptive
+        # 的 rerank 粗排池走同一路径，候选池同样更干净）；BM25 强命中豁免
+        bm25_exempt_rank = ConfigRegistry.get(
+            "retrieval.fusion.bm25_exempt_rank", 3)
+        scored = apply_vec_sim_filter(
+            scored, vec_sim_threshold, bm25_exempt_rank)[:top_k]
         # R2 旁路信号：向量路 top1 余弦分数（0-1），仅供 RefusalCheck 置信度判定。
         # 语义不变（P2c 过滤不改变它：过滤阈值与置信度阈值同为 0.45，
         # 过滤后非空 ⟺ 向量路 top1 ≥ 0.45）

@@ -26,13 +26,16 @@ class FakeChatService:
 
     def __init__(self):
         self.calls = []
+        self.sources = []
         # B 方案预热入口：mock 掉 reranker，验证 run_comparison 只在
         # hybrid+rerank 配置触发 ensure_loaded
         self.retrieval = MagicMock()
         self.retrieval.reranker.ensure_loaded = MagicMock()
 
-    async def process(self, query: str, session_id: str = None) -> ChatResponse:
+    async def process(self, query: str, session_id: str = None,
+                      source: str = "chat") -> ChatResponse:
         self.calls.append(query)
+        self.sources.append(source)
         if "天气" in query:
             return ChatResponse(answer="", session_id="s", refused=True,
                                 refusal_reason="out_of_scope")
@@ -200,6 +203,9 @@ def test_run_comparison_executes_three_configs(tmp_path):
     assert {r["config_name"] for r in results} == {"vector-only", "hybrid", "hybrid+rerank"}
     # 每条 QA 都调用了 chat_service
     assert len(service.calls) == 3 * 5
+    # 评估跑批统一标记 source="eval"（request_metrics 与 chat 对话区分）
+    assert len(service.sources) == 3 * 5
+    assert set(service.sources) == {"eval"}
     # B 方案预热：只在 hybrid+rerank 配置触发一次（vector-only/hybrid 不预热）
     assert service.retrieval.reranker.ensure_loaded.call_count == 1
 

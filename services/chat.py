@@ -56,8 +56,10 @@ class ChatService:
         self.compressor = compressor or ConversationCompressor()
 
     async def process(self, query: str, session_id: str = None,
-                      mode: Optional[str] = None) -> ChatResponse:
-        """问答编排。mode=None → config 全局值；否则请求级覆盖（缓存 key / 检索 / 埋点全用生效值）"""
+                      mode: Optional[str] = None,
+                      source: str = "chat") -> ChatResponse:
+        """问答编排。mode=None → config 全局值；否则请求级覆盖（缓存 key / 检索 / 埋点全用生效值）。
+        source 区分调用方（'chat' 用户对话 / 'eval' 评估跑批），写入 request_metrics 供报表分组。"""
         t_start = time.perf_counter()
         cache_enabled = bool(ConfigRegistry.get("cache.l1.enabled", True))
         mode = mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
@@ -76,7 +78,7 @@ class ChatService:
                                        if cached is not None else None)})
             if cached is not None:
                 cache_ms = int((time.perf_counter() - cache_start) * 1000)
-                return await self._from_cache(cached, session_id, mode, cache_ms)
+                return await self._from_cache(cached, session_id, mode, cache_ms, source)
 
         # 2. 会话：新会话 INSERT，既有会话刷新 last_active
         if session_id is None:
@@ -206,6 +208,7 @@ class ChatService:
             refused=refused, refusal_reason=refusal_reason,
             timeout=timeout, degraded=degraded,
             pii_redact_count=pii_redact_count, injection_blocked=injection_blocked,
+            source=source,
         )
 
         # 10. 组装响应
@@ -219,7 +222,8 @@ class ChatService:
     # ── 私有方法（SQLite 持久化）──────────────────────────
 
     async def _from_cache(self, cached: CachedAnswer, session_id: Optional[str],
-                          retrieval_mode: str, latency_total_ms: int) -> ChatResponse:
+                          retrieval_mode: str, latency_total_ms: int,
+                          source: str = "chat") -> ChatResponse:
         """缓存命中：组装响应并写 request_metrics（cache_hit=1，token 用缓存时记录值）"""
         request_id = uuid.uuid4().hex
         timing = {"retrieval": 0, "rerank": 0, "generation": 0, "total": latency_total_ms}
@@ -229,6 +233,7 @@ class ChatService:
             timing_ms=timing, token_usage=tokens, retrieval_mode=retrieval_mode,
             cache_hit=True, refused=cached.refused, refusal_reason=cached.refusal_reason,
             timeout=False, degraded=False, pii_redact_count=0, injection_blocked=0,
+            source=source,
         )
         return ChatResponse(
             answer=cached.answer,
@@ -323,7 +328,7 @@ class ChatService:
                             retrieval_mode: str, cache_hit: bool, refused: bool,
                             refusal_reason: Optional[str], timeout: bool,
                             degraded: bool, pii_redact_count: int,
-                            injection_blocked: int) -> None:
+                            injection_blocked: int, source: str = "chat") -> None:
         db = await get_db()
         try:
             await db.execute(
@@ -331,14 +336,14 @@ class ChatService:
                 "latency_retrieval, latency_rerank, latency_generation, latency_total, "
                 "token_prompt, token_completion, token_total, retrieval_mode, cache_hit, "
                 "refused, refusal_reason, timeout, degraded, pii_redact_count, "
-                "injection_blocked) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "injection_blocked, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (request_id, session_id,
                  timing_ms.get("retrieval"), timing_ms.get("rerank"),
                  timing_ms.get("generation"), timing_ms.get("total"),
                  token_usage.get("prompt", 0), token_usage.get("completion", 0),
                  token_usage.get("total", 0), retrieval_mode, int(cache_hit),
                  int(refused), refusal_reason, int(timeout), int(degraded),
-                 int(pii_redact_count), int(injection_blocked)))
+                 int(pii_redact_count), int(injection_blocked), source))
             await db.commit()
         finally:
             await db.close()
