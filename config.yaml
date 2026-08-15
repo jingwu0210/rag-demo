@@ -64,11 +64,15 @@ retrieval:
     hybrid_min_score: 0.0164       # hybrid 用：RRF 尺度阈值 = 单路 rank1 理论值 1/61
                                    # 语义："至少一路排第一"的 chunk 才保留
     min_chunks: 3
-    max_chunks: 8
+    max_chunks: 10                   # R13: 8→10（R6 归因：答案 chunk 常落第 5-8 位
+                                      # 被截断，10 可救回部分排序靠后样本；代价
+                                      # prompt +25% token，可接受）
   metadata_filter:
     enabled: true
     expire:
-      enabled: false               # 默认关闭，有年度合规文件时开启
+      enabled: true                # R13: 开启（R6 归因：legacy 过期文档排检索第 1 位
+                                   # 压过现行标准——过期过滤的设计场景已存在，
+                                   # baseline 评估应实证该能力）
       grace_period_days: 90
   timeout: 3
   max_workers: 2
@@ -127,6 +131,18 @@ pii:
     - name: ip_address
       regex: "\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"
       replacement: "***[REDACTED_IP]***"
+    # R13 F3 扩展：R6 暴露两个脱敏漏洞——银行卡号（Luhn 测试号）明文回显、
+    # 国际电话格式（+1 (415) 555-2671）不匹配中国手机 pattern。按"数字格式
+    # 特征"匹配而非字段名（字段名枚举无法穷尽）。
+    - name: bankcard
+      regex: "(?<!\\d)\\d{13,19}(?!\\d)"
+      replacement: "***[REDACTED_CARD]***"
+    - name: intl_phone
+      regex: "\\+(?:[0-9][\\s\\-()]?){7,14}[0-9]"
+      replacement: "***[REDACTED_PHONE]***"
+    - name: birth_date
+      regex: "(19|20)\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])"
+      replacement: "***[REDACTED_DATE]***"
 
 # ── 拒答策略 ──────────────────────────────────────────────
 refusal:
@@ -198,9 +214,8 @@ logging:
 
 # ── 评估 ──────────────────────────────────────────────────
 eval:
-  test_set_path: assets/testsets/test_set_archived_v2.json  # 演示语料配套测试集（80 条）
-                                             # 新语料 baseline 测试集建成后改回 test_set.json；
-                                             # 历史测试集归档于 test_set_archived_v1/v2
+  test_set_path: assets/testsets/test_set.json  # baseline 测试集（110 条，新语料配套，不带版本）
+                                             # 历史测试集归档于 test_set_archived_v1/v2（演示语料配套）
   models:
     provider: deepseek
     model: deepseek-chat
