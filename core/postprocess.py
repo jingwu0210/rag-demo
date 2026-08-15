@@ -138,14 +138,32 @@ class PostProcessor:
         self.refusal_check = refusal_check or RefusalCheck()
         self._scrubber = PIIScrubber()
 
-    def process(self, answer: str, query: str, retrieval_result, mode: str = None) -> PostProcessResult:
+    def pre_refuse(self, query: str, retrieval_result, mode: str = None) -> Optional[Tuple[str, str]]:
+        """生成前拒答预检：命中返回 (reason, template)，否则 None。
+
+        把 RefusalCheck 提前到生成前（chat.py 在生成前调用）——RefusalCheck 只依赖
+        query + 检索结果，两者在生成前都已就绪，避免对注定拒答的样本浪费一次生成
+        LLM 调用（实测 14/110 样本）。
+        """
         refused, reason = self.refusal_check.evaluate(query, retrieval_result, mode=mode)
         if refused:
             template = ConfigRegistry.get(
                 f"refusal.responses.{reason}",
                 _FALLBACK_RESPONSES.get(reason, ""),
             )
+            return reason, template
+        return None
+
+    def scrub(self, answer: str) -> Tuple[str, int]:
+        """PII 脱敏（生成后，仅脱敏不判拒答）。"""
+        return self._scrubber.redact(answer)
+
+    def process(self, answer: str, query: str, retrieval_result, mode: str = None) -> PostProcessResult:
+        """完整后处理（拒答 + 脱敏），保留兼容现有调用方/测试。"""
+        pre = self.pre_refuse(query, retrieval_result, mode=mode)
+        if pre is not None:
+            reason, template = pre
             return PostProcessResult(
                 answer=template, refused=True, refusal_reason=reason)
-        redacted, count = self._scrubber.redact(answer)
+        redacted, count = self.scrub(answer)
         return PostProcessResult(answer=redacted, pii_redact_count=count)
