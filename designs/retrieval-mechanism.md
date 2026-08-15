@@ -1,4 +1,4 @@
-# 检索三模式实现机制 & 已知问题台账
+# 检索三模式实现机制与已知问题台账
 
 > 更新：2026-08-15（v1.0）。本文档固化三模式检索链路的**当前实现机制**与**已知问题**，作为后续调优的单一依据。参数以 `config.yaml` 为唯一真源，本文数值为当前默认值快照。
 
@@ -42,7 +42,7 @@ query → 向量/BM25 粗排候选池 top30（top_k 20 × candidates_multiplier 
   → RRF 加权融合（同 hybrid）
   → P2c/P2d 过滤（同 hybrid）
   → skip_adaptive（粗排不截断，全量候选给 rerank）
-  → CrossEncoder 全量打分（输入全文，不截断——A 方案，见 §3.1）
+  → CrossEncoder 全量打分（输入截断 300 字符——v1.18，见 §3.1）
   → P1h 二次融合：final = 1/(60+粗排rank) + 1/(60+rerank rank)
   → final 降序硬截断 top_n=7
   → InjectionScanner → 送 LLM
@@ -86,6 +86,7 @@ query → 向量/BM25 粗排候选池 top30（top_k 20 × candidates_multiplier 
   - 候选不能降：报销时限答案 chunk 粗排第 24 名，候选 15/20 会漏召回
   - 代价：30 候选全文 ~5s，P95 预期 7-8s（10s SLA 内但余量收紧）
   - **被否的两阶段方案**：阶段 1 短截断快筛会先把答案 chunk 筛掉（它在短截断下排第 14 名），阶段 2 全文看不到——自相矛盾
+- **v1.18 修正（2026-08-16）**：A 方案全文 ~5s × 5 并发在 MPS 上争抢 → 粗排超时 → 空检索 → 误拒 45 条（hybrid+rerank Refusal 0.8545）。改为 `input_truncate_chars=300` 折中：rerank ~1.5s 使 5 并发挤进 10s SLA（实测 5/5 达标），CP 0.79 仍 ≥0.70（全文 0.86 但 43% 空检索失败，300 字符仅 2%）。gift register 答案句在 658 char 仍会被 300 截断，但该损失换回了 5 并发正确性——性能与精度的新平衡点。
 - **性质**：大文档精细条款检索是 RAG 公认难点；性能-精度硬权衡
 
 ### 3.2 理论梯度未现（R7 残余 #4）
@@ -138,6 +139,6 @@ query → 向量/BM25 粗排候选池 top30（top_k 20 × candidates_multiplier 
 | adaptive.min_chunks / max_chunks | 3 / 10 | AdaptiveK 动态截断界 |
 | reranker.top_n | 7 | rerank 模式最终硬截断 |
 | reranker.candidates_multiplier | 1.5 | rerank 候选池放大（30；报销时限答案粗排第24，不可降） |
-| reranker.input_truncate_chars | 0 | rerank 输入截断（0=全文，A 方案） |
-| reranker.timeout | 5 | 阶段预算（A 方案：全文 30 候选 ~5s） |
+| reranker.input_truncate_chars | 300 | rerank 输入截断（v1.18：300 字符折中，CP 0.79 ≥0.70 + 5 并发达标） |
+| reranker.timeout | 5 | 阶段预算（300 字符 30 候选 ~1.5s） |
 | expire.enabled / grace | true / 90 | 过期过滤 |
