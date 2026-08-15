@@ -618,6 +618,54 @@ function el(tag, cls, text){
 function esc(s){ return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 function fmtNum(n){ return Number(n).toLocaleString("zh-CN"); }
 function pct(v, digits){ return v == null ? "—" : (v * 100).toFixed(digits ?? 1) + "%"; }
+
+/* ── 时间显示（SQLite 存 UTC → 本地时区）───────────────── */
+/* 时间列名白名单：命中即尝试转换（值非日期格式时回退原样） */
+const TS_COL_RE = /timestamp|created_at|ingested_at|last_active|updated_at|deleted_at/i;
+/* 值级"看起来像时间戳"：ISO 8601 / SQLite datetime，须含时间（避免误转仅日期/普通文本） */
+const TS_VALUE_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:\d{2})?)?$/;
+/* 时间列命中时的放宽判定：日期+时间或纯日期均可 */
+const TS_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:\d{2})?)?)?$/;
+/* 文本内嵌时间戳（日志行）：匹配 YYYY-MM-DD[T ]HH:MM[:SS[.fff]][Z|±hh:mm] 子串 */
+const TS_IN_TEXT_RE = /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:\d{2})?)?/g;
+
+/* 解析为 Date：SQLite 空格分隔 / ISO 无时区后缀一律视为 UTC（补 T/Z），
+   避免 JS 按本地时间解析造成二次偏移；解析失败返回 null */
+function parseUtcDate(s){
+  let t = String(s).trim();
+  if(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(t)) t = t.replace(" ", "T");
+  if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(t)) t += "Z";
+  const d = new Date(t);
+  return isNaN(d.getTime()) ? null : d;
+}
+/* 值 → 本地时区字符串；非时间格式 / 解析失败回退原值 */
+function toLocalTime(v){
+  if(typeof v !== "string") return v;
+  const s = v.trim();
+  if(!s || !TS_VALUE_RE.test(s)) return v;
+  const d = parseUtcDate(s);
+  return d ? d.toLocaleString() : v;
+}
+/* DB 表单元格：列名命中时间列（放宽纯日期）或值形似 ISO/SQLite 时间 → 转本地时区 */
+function tsCellDisplay(colName, v){
+  if(typeof v !== "string") return v;
+  const s = v.trim();
+  if(!s) return v;
+  if(TS_COL_RE.test(colName)){
+    if(!TS_DATE_RE.test(s)) return v;   // 时间列但值不是日期 → 原样
+  }else{
+    if(!TS_VALUE_RE.test(s)) return v;  // 普通列但值不含时间 → 原样
+  }
+  const d = parseUtcDate(s);
+  return d ? d.toLocaleString() : v;
+}
+/* 文本内嵌时间戳（日志）：逐段转本地时区，解析失败保留原文 */
+function convertTsInText(text){
+  return String(text).replace(TS_IN_TEXT_RE, m => {
+    const d = parseUtcDate(m);
+    return d ? d.toLocaleString() : m;
+  });
+}
 /* loading 占位（spinner + 文案），供各区块加载态复用 */
 function loadingEl(text){
   const d = el("div", "loading");
@@ -1334,7 +1382,7 @@ async function queryEval(){
     const first = rows[0];
     sum.append(
       el("span", "tag b", "run_id: " + (data.run_id || "—")),
-      el("span", "tag", "时间 " + (first.timestamp || "—")),
+      el("span", "tag", "时间 " + toLocalTime(first.timestamp || "—")),
       el("span", "tag", "测试集 " + (first.total_qa_pairs != null ? first.total_qa_pairs + " 条" : "—")),
       el("span", "tag", "hash " + (first.test_set_hash || "—").slice(0, 8))
     );
@@ -1555,7 +1603,7 @@ function renderLogTail(){
   if(logState.page > totalPages) logState.page = totalPages;   // 过滤收窄后页码回退
   const start = (logState.page - 1) * logState.pageSize;
   box.replaceChildren(document.createTextNode(
-    filtered.slice(start, start + logState.pageSize).join("\n")));
+    convertTsInText(filtered.slice(start, start + logState.pageSize).join("\n"))));
   renderLogPager(total);
 }
 
@@ -1630,10 +1678,19 @@ $("logFilter").addEventListener("input", () => {
 
 /* ③ Database（服务端分页 limit/offset + q 关键词过滤 + 分页条）
    来源次级菜单：全部 / Chat / Eval — 对含 source 列的表（request_metrics / turns）
-   按 source 等值过滤；无 source 列的表后端忽略该参数返回全部。 */
+   按 source 等值过滤；无 source 列的表后端忽略该参数返回全部（行数不分来源）。 */
 const dbState = { table: null, page: 1, pageSize: 100, q: "" };
 const dbSourceState = { source: "all" };   // all | chat | eval
 let dbFilterTimer = null;
+/* 表含义提示：卡片 title（tooltip）用途说明 */
+const DB_TABLE_DESC = {
+  cache_entries: "L1 缓存（chat/eval 共用，无来源列，行数不分来源）",
+  eval_history: "评估历史（仅 eval，无来源列）",
+  request_metrics: "请求指标（含来源列，可按 Chat/Eval 过滤）",
+  turns: "对话记录（含来源列，可按 Chat/Eval 过滤）",
+  sessions: "会话（chat 为主，无来源列）",
+  ingest_log: "入库日志（仅 ingest，无来源列，对 chat/eval 均无意义）",
+};
 /* 数据来源提示：某表 source 分布（每表首次打开时计算一次，缓存于 dbSourceDist/dbSourceDistFor）。
    历史数据（R1-R7 评估 + demo 聊天）在 ALTER 迁移时 source 全部默认归 'chat'，无法追溯真实来源，
    仅在分布单一（全 chat / 全 eval）时展示提示，帮助理解为何切 Eval 为空 / Chat 混入评估数据。 */
@@ -1680,7 +1737,10 @@ async function loadTables(){
   const box = $("dbTables");
   box.replaceChildren(loadingEl("正在加载表清单…"));
   try{
-    const d = await apiJSON("/db/tables");
+    const url = dbSourceState.source !== "all"
+      ? "/db/tables?source=" + encodeURIComponent(dbSourceState.source)
+      : "/db/tables";
+    const d = await apiJSON(url);
     const tables = Array.isArray(d) ? d : (d.tables || []);
     box.replaceChildren();
     if(!tables.length){
@@ -1690,8 +1750,13 @@ async function loadTables(){
     tables.forEach(t => {
       const name = typeof t === "string" ? t : (t.name || t.table || "—");
       const rows = typeof t === "string" ? "" : (t.rows != null ? t.rows : (t.row_count != null ? t.row_count : ""));
+      const hasSource = typeof t === "object" && t.has_source != null ? t.has_source : null;
       const b = el("button", "db-btn");
-      b.append(el("span", "", name), el("span", "rows", rows === "" ? "" : rows + " 行"));
+      b.title = DB_TABLE_DESC[name] || (hasSource === false ? "无来源列，行数不分来源" : "数据库表");
+      b.append(el("span", "", name));
+      const rowsEl = el("span", "rows", rows === "" ? "" : rows + " 行");
+      if(hasSource === false) rowsEl.append(document.createTextNode(" · 不分来源"));
+      b.append(rowsEl);
       b.addEventListener("click", () => loadTable(name));
       box.append(b);
     });
@@ -1784,7 +1849,10 @@ async function fetchDbTable(){
         // 后端 rows 为值数组行（[[v,v,...],...]）→ 按列索引取值；
         // 兼容对象行（r[c] 列名取值）
         const v = Array.isArray(r) ? r[ci] : r[c];
-        const td = el("td", "num", v == null ? "NULL" : String(v));
+        // 时间列（created_at/timestamp/last_active…）或 ISO/SQLite 时间值 → 本地时区显示；
+        // title 保留原始 UTC 值便于核对
+        const display = v == null ? "NULL" : tsCellDisplay(String(c), v);
+        const td = el("td", "num", display);
         td.style.maxWidth = "320px"; td.style.overflow = "hidden"; td.style.textOverflow = "ellipsis";
         td.title = v == null ? "" : String(v);
         tr.append(td);
@@ -1817,13 +1885,14 @@ function loadTable(name){
   return fetchDbTable();
 }
 
-/* 来源次级菜单切换：刷新当前表预览（若已打开）以应用 source 过滤 */
+/* 来源次级菜单切换：重载表清单（卡片行数随 source 变化）+ 刷新当前表预览（若已打开） */
 $("dbSourceSeg").addEventListener("click", e => {
   const b = e.target.closest(".seg-btn");
   if(!b) return;
   document.querySelectorAll("#dbSourceSeg .seg-btn").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
   dbSourceState.source = b.dataset.source;
+  loadTables();
   if(dbState.table){
     dbState.page = 1;
     fetchDbTable();

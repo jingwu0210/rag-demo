@@ -838,6 +838,41 @@ def test_db_table_source_ignored_for_no_source_table(tmp_path):
     assert len(r.json()["rows"]) == 2
 
 
+def test_db_tables_source_filter(tmp_path):
+    """db_tables source 参数：对含 source 列的表（turns/request_metrics）按 source 过滤行数，
+    且响应带 has_source；无 source 列的表（cache_entries/eval_history/sessions/ingest_log）
+    忽略 source 参数返回全表行数（与 db_table 的 source 过滤语义一致）"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_turns_with_source())
+    asyncio.run(_insert_cache_rows())
+
+    # 不传 source → 全表行数；has_source 区分两类表
+    r = TestClient(app).get("/db/tables")
+    assert r.status_code == 200
+    t = {x["name"]: x for x in r.json()["tables"]}
+    assert t["turns"]["rows"] == 3
+    assert t["turns"]["has_source"] is True
+    assert t["request_metrics"]["has_source"] is True
+    assert t["cache_entries"]["rows"] == 2
+    assert t["cache_entries"]["has_source"] is False
+    assert t["eval_history"]["has_source"] is False
+    assert t["sessions"]["has_source"] is False
+    assert t["ingest_log"]["has_source"] is False
+
+    # source=chat → 含 source 列的表过滤；无 source 列表仍全表
+    r = TestClient(app).get("/db/tables", params={"source": "chat"})
+    t = {x["name"]: x for x in r.json()["tables"]}
+    assert t["turns"]["rows"] == 2
+    assert t["request_metrics"]["rows"] == 0
+    assert t["cache_entries"]["rows"] == 2    # 无 source 列 → 不受影响
+
+    # source=eval
+    r = TestClient(app).get("/db/tables", params={"source": "eval"})
+    t = {x["name"]: x for x in r.json()["tables"]}
+    assert t["turns"]["rows"] == 1
+    assert t["sessions"]["rows"] == 2         # 无 source 列 → 全表（两条 session）
+
+
 async def _create_old_metrics_table():
     """构造旧库 request_metrics（无 source 列）+ 1 行存量数据"""
     db = await get_db()

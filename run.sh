@@ -102,7 +102,7 @@ else
 
     if [ "${NON_INTERACTIVE}" != "1" ]; then
         # Q1: wipe 重灌（每次询问，默认 N；危险操作入口保持可见）
-        read -r -p "🗑️  是否 wipe 重灌向量库？[y/N] " ANS || ANS=""
+        read -r -p "🗑️  是否 wipe 重灌向量库？[y/N]（回车=否） " ANS || ANS=""
         if [[ "$ANS" =~ ^[Yy]$ ]]; then
             echo "💾 wipe 自动备份 workspace/cache.db（评估历史按铁律 10 保留）"
             .venv/bin/python scripts/ingest_corpus.py --wipe 2>/dev/null \
@@ -113,7 +113,7 @@ else
         fi
 
         # Q2: 增量语料
-        read -r -p "📄 有增量语料要入库吗？[y/N] " ANS || ANS=""
+        read -r -p "📄 有增量语料要入库吗？[y/N]（回车=否） " ANS || ANS=""
         if [[ "$ANS" =~ ^[Yy]$ ]]; then
             echo "📁 请将文档放入 assets/corpus/（pdf/docx/md/txt，可建子目录），完成后按回车..."
             read -r || true
@@ -142,7 +142,10 @@ echo "🚀 启动 RAG QA Service..."
 # stdout/stderr 分别落盘 workspace/logs/run-<时间戳>.log / .stderr.log，
 # Maintenance > Logs 页即可查看 chat 请求日志（/logs 接口读该目录）
 RUN_LOG="workspace/logs/run-$(date +%Y%m%d-%H%M%S)"
-.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000 > "${RUN_LOG}.log" 2> "${RUN_LOG}.stderr.log" &
+# --loop asyncio：强制标准事件循环。uvicorn[standard] 默认用 uvloop，而 ragas 的
+# nest_asyncio 无法 patch uvloop.Loop → eval/run 报"Can't patch loop of type
+# uvloop.Loop"（实测）。asyncio 循环下 nest_asyncio 可 patch，评估后台任务可跑。
+.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000 --loop asyncio > "${RUN_LOG}.log" 2> "${RUN_LOG}.stderr.log" &
 SERVER_PID=$!
 
 READY=0
