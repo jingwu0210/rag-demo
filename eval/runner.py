@@ -542,6 +542,14 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
         style = (round(sum(valid_styles) / len(valid_styles) / 5, 4)
                  if valid_styles else None)
 
+        # NFR-3.1：千次调用 Token 成本估算（单价来自 config llm.price_*_per_m，¥/百万 tokens）
+        avg_prompt = int(np.mean(prompt_tokens)) if prompt_tokens else 0
+        avg_completion = int(np.mean(completion_tokens)) if completion_tokens else 0
+        cost_1000 = _cost_per_1000(
+            avg_prompt, avg_completion,
+            float(ConfigRegistry.get("llm.price_input_per_m", 0.0)),
+            float(ConfigRegistry.get("llm.price_output_per_m", 0.0)))
+
         n = max(len(test_set), 1)
         agg = {
             "config_name": mode,
@@ -562,9 +570,10 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             "p50_latency_ms": int(np.percentile(latencies, 50)) if latencies else 0,
             "p95_latency_ms": int(np.percentile(latencies, 95)) if latencies else 0,
             "avg_tokens_per_call": int(np.mean(tokens)) if tokens else 0,
-            # E3: token/chunk 分解观测（机制透明化）
-            "avg_prompt_tokens": int(np.mean(prompt_tokens)) if prompt_tokens else 0,
-            "avg_completion_tokens": int(np.mean(completion_tokens)) if completion_tokens else 0,
+            # E3: token/chunk 分解观测（机制透明化）+ NFR-3.1 千次成本
+            "avg_prompt_tokens": avg_prompt,
+            "avg_completion_tokens": avg_completion,
+            "cost_per_1000_calls": cost_1000,
             "avg_chunks_per_call": round(float(np.mean(chunks_counts)), 2) if chunks_counts else 0,
             "timeout_rate": round(timeout_count / n, 4),
             "total_pii_redactions": total_pii,
@@ -597,6 +606,20 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
 
 def _round_mean(scores: List[float]) -> Optional[float]:
     return round(float(np.mean(scores)), 4) if scores else None
+
+
+def _cost_per_1000(avg_prompt_tokens: float, avg_completion_tokens: float,
+                   price_input_per_m: float, price_output_per_m: float) -> float:
+    """NFR-3.1：千次调用 Token 成本估算（¥）。
+
+    cost = (prompt/1e6 × 输入单价 + completion/1e6 × 输出单价) × 1000。
+    单价为 ¥/百万 tokens（config llm.price_input_per_m / price_output_per_m，
+    见设计文档 §7.5 三 provider 定价表）。用实测 token 均值而非静态假设，
+    坐实 NFR-3.1 "eval.sh 聚合千次 cost" 的自动化验收。
+    """
+    per_call = (avg_prompt_tokens / 1_000_000 * price_input_per_m
+                + avg_completion_tokens / 1_000_000 * price_output_per_m)
+    return round(per_call * 1000, 2)
 
 
 async def _save_eval_history(agg: dict) -> None:
