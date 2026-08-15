@@ -36,10 +36,11 @@
 ## 交付物清单（assignment 硬要求）
 
 - [x] 完整代码 + config.yaml（100+ 配置项）
-- [x] 一键评估脚本 eval.sh
-- [ ] 评估报告（三配置对比 + before/after + ≥2 个 Issue Diagnosis 案例，改进 ≥10%）
-- [x] 日志字段字典 deliverables/log-field-dictionary.md + 样本日志
-- [ ] 设计文档版本记录维护（§0，每次修改必须更新）
+- [x] 一键评估脚本 `eval.sh`（仓库根目录，非 deliverables/；执行 `./eval.sh`）
+- [x] 评估报告 `deliverables/evaluation-report.md`（三配置对比 + before/after）+ Issue Diagnosis `deliverables/issue-diagnosis.md`（3 案例，改进 ≥10%）
+- [x] 日志字段字典 `deliverables/log-field-dictionary.md` + 样本日志 `deliverables/sample-log.md`（原始样本 `deliverables/sample-logs/sample.log`）
+- [x] 运营报表 `deliverables/operations-report.md` + `.csv`
+- [x] 设计文档版本记录维护（§0 已更新至 v1.18，正文与代码同步）
 
 ## 沟通约定
 

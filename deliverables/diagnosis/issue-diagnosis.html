@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>根因诊断</title>
+<style>
+  :root {
+    --ground: #f5f6f8;
+    --surface: #ffffff;
+    --ink: #1a1f2a;
+    --muted: #5b6675;
+    --faint: #8b94a3;
+    --border: #e2e6ec;
+    --accent: #2f4e7a;
+    --accent-soft: #e8eef6;
+    --problem: #b4452a;
+    --problem-soft: #f7ece7;
+    --fix: #1e7b4e;
+    --fix-soft: #e9f3ee;
+    --mono-bg: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0e1116;
+      --surface: #151a22;
+      --ink: #e8ecf2;
+      --muted: #8a96a6;
+      --faint: #6b7686;
+      --border: #2a323e;
+      --accent: #6b92c9;
+      --accent-soft: #1c2634;
+      --problem: #e07b5a;
+      --problem-soft: #2a1d18;
+      --fix: #4caf7d;
+      --fix-soft: #17251d;
+      --mono-bg: #12161c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e1116;
+    --surface: #151a22;
+    --ink: #e8ecf2;
+    --muted: #8a96a6;
+    --faint: #6b7686;
+    --border: #2a323e;
+    --accent: #6b92c9;
+    --accent-soft: #1c2634;
+    --problem: #e07b5a;
+    --problem-soft: #2a1d18;
+    --fix: #4caf7d;
+    --fix-soft: #17251d;
+    --mono-bg: #12161c;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  .wrap { max-width: 920px; margin: 0 auto; padding: 48px 24px 72px; }
+
+  header.hero { margin-bottom: 40px; }
+  .eyebrow {
+    font: 600 12px/1.4 system-ui, sans-serif;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font: 700 32px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+  .lede { color: var(--muted); font-size: 17px; max-width: 64ch; margin: 0; }
+
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin: 28px 0 0;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .stat .k { display: block; font-size: 12px; color: var(--faint); letter-spacing: 0.06em; text-transform: uppercase; }
+  .stat .v { display: block; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+  .phase-label {
+    display: inline-block;
+    font: 600 12px/1 system-ui, sans-serif;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px;
+    margin-top: 20px;
+  }
+  .card .head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .issue-no {
+    font: 700 13px/1 system-ui, sans-serif;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums;
+  }
+  h2 {
+    font: 650 20px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: -0.005em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .phase {
+    font: 600 11px/1 system-ui, sans-serif;
+    color: var(--faint);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .symptom {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border-radius: 8px;
+    background: var(--problem-soft);
+    border-left: 3px solid var(--problem);
+  }
+  .symptom .tag { font-weight: 700; color: var(--problem); }
+  .symptom p { margin: 4px 0 0; }
+
+  .rows { margin-top: 20px; display: grid; gap: 18px; }
+  .row h3 {
+    font: 600 13px/1.4 system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin: 0 0 8px;
+  }
+  .row h3.problem { color: var(--problem); }
+  .row h3.fix { color: var(--fix); }
+  .row h3.evidence { color: var(--muted); }
+
+  .row p, .row li { color: var(--ink); }
+  .row ul { margin: 0; padding-left: 20px; }
+  .row li { margin: 4px 0; }
+
+  pre.evidence {
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--mono-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-x: auto;
+    font: 13px/1.55 ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    color: var(--ink);
+    white-space: pre;
+  }
+  pre.evidence .c { color: var(--faint); }
+
+  .effect {
+    margin-top: 20px;
+    display: grid;
+    gap: 8px;
+  }
+  .before-after {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .ba {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    background: var(--fix-soft);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  .ba .lbl { font-size: 12px; color: var(--muted); }
+  .ba .num { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ba.before .num { color: var(--problem); }
+  .ba.after .num { color: var(--fix); }
+  .arrow { color: var(--faint); font-weight: 700; }
+  .delta { font: 600 13px/1 system-ui, sans-serif; color: var(--fix); }
+
+  .foot {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    color: var(--faint);
+    font-size: 14px;
+  }
+  .foot code { font: 13px ui-monospace, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">RAG QA Service · 评估</p>
+    <h1>四个数据失真的根因与修复</h1>
+    <p class="lede">从 R6 到 R9 的两轮评估中，逐一定位并修复了四个影响指标真实性的缺陷：一个语料质量缺陷、三个评估链路失真。每个案例附日志证据、根因链与量化修复效果。</p>
+    <div class="summary">
+      <div class="stat"><span class="k">修复案例</span><span class="v">4</span></div>
+      <div class="stat"><span class="k">CP 损失清零</span><span class="v">50.8%</span></div>
+      <div class="stat"><span class="k">Refusal 提升</span><span class="v">+13.6pp</span></div>
+      <div class="stat"><span class="k">OOS 拒答率</span><span class="v">→ 1.0</span></div>
+    </div>
+  </header>
+
+  <p class="phase-label">检索质量修复链 · R6→R7</p>
+
+  <article class="card">
+    <div class="head"><span class="issue-no">ISSUE-001</span><h2>空格 PDF 召回失败：CJK 字体渲染给拉丁字符插空格</h2><span class="phase">语料 / 嵌入</span></div>
+    <div class="symptom"><span class="tag">问题现象</span><p>16 题 × 3 配置 = 48 个样本 Context Precision 全部为 0，占 CP 损失 50.8%。</p></div>
+    <div class="rows">
+      <div class="row">
+        <h3 class="evidence">日志证据</h3>
+        <pre class="evidence"><span class="c"># R6 在册异常 #1（eval-history）</span>
+"空格 PDF 召回失败（16 题×3 配置 CP=0，占 CP 损失 50.8%）"
+<span class="c"># 语料产物抽查：拉丁字符间被插入空格</span>
+"compliance-guide.en.md" 渲染后 "g i f t   r e g i s t e r"</pre>
+      </div>
+      <div class="row">
+        <h3 class="problem">根因分析</h3>
+        <p>转 PDF 时沿用演示语料生成器的 CJK 字体缺陷：<code>china-s</code> 字体渲染拉丁字符时在字符间插入空格，导致 BGE-M3 对英文条款的嵌入彻底失效——向量检索对这批 chunk 的相似度归零，召回失败。</p>
+      </div>
+      <div class="row">
+        <h3 class="fix">修复方案</h3>
+        <ul>
+          <li>F1 块级双字体渲染：中文用 CJK 字体、拉丁用拉丁字体，生成器与语料 PDF 同步修复重灌。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="effect">
+      <div class="before-after">
+        <span class="ba before"><span class="lbl">修复前 CP</span><span class="num">0.6558 / 0.6440 / 0.6624</span></span>
+        <span class="arrow">→</span>
+        <span class="ba after"><span class="lbl">修复后 CP</span><span class="num">0.7694 / 0.7563 / 0.7697</span></span>
+      </div>
+      <span class="delta">三配置 +10.7% / +11.2% / +11.4%</span>
+    </div>
+  </article>
+
+  <p class="phase-label" style="margin-top:36px">数据失真修复链 · R7→R9</p>
+
+  <article class="card">
+    <div class="head"><span class="issue-no">ISSUE-002</span><h2>Compliance 恒 5：judge 思考链吃满 max_tokens</h2><span class="phase">指标失真</span></div>
+    <div class="symptom"><span class="tag">问题现象</span><p>切换 deepseek-v4-flash 后，Answer Compliance 三配置恒 ≈1.0（judge 恒打 5 分），指标失去区分度，无法反映真实合规质量。</p></div>
+    <div class="rows">
+      <div class="row">
+        <h3 class="evidence">日志证据</h3>
+        <pre class="evidence"><span class="c"># eval/runner.py _judge_llm_call 注释原文</span>
+"deepseek-v4-flash 默认开启思考模式：思考链（reasoning_content）
+ 会吃满 max_tokens=100，导致 content 恒空 → judge_unparsable"
+[2026-08-15 17:41:12Z] warning judge_unparsable content="分数|理由" (eval.runner)</pre>
+      </div>
+      <div class="row">
+        <h3 class="problem">根因分析</h3>
+        <p>v4-flash 默认开启思考模式，思考链（reasoning_content）先占用生成预算。judge 请求 <code>max_tokens=100</code> 本意是限制输出长度，预算却被思考链吃满，content 退化（恒打 5 分或输出模板字面量）。Ragas judge（faithfulness/CP）同样受影响——长 prompt 推理极慢，实测 4 分钟仅完成 27%。</p>
+      </div>
+      <div class="row">
+        <h3 class="fix">修复方案</h3>
+        <ul>
+          <li>对 judge / generator / Ragas 三处统一显式关闭思考模式 <code>thinking: {"type": "disabled"}</code>。</li>
+          <li>judge 是"分数|理由"裁决，无需思考链；关闭后行为对齐旧 deepseek-chat。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="effect">
+      <div class="before-after">
+        <span class="ba before"><span class="lbl">修复前 Compliance</span><span class="num">恒 1.0（假象）</span></span>
+        <span class="arrow">→</span>
+        <span class="ba after"><span class="lbl">修复后 Compliance</span><span class="num">0.9067 / 0.9465 / 0.9070</span></span>
+      </div>
+      <span class="delta">指标恢复真实区分度，跨模型稳定达标 ≥0.80</span>
+    </div>
+  </article>
+
+  <article class="card">
+    <div class="head"><span class="issue-no">ISSUE-003</span><h2>hybrid+rerank 过度拒答：全文 rerank 超时 → 空检索 → 误拒</h2><span class="phase">指标失真</span></div>
+    <div class="symptom"><span class="tag">问题现象</span><p>hybrid+rerank 配置对正常业务问题过度拒答，实测 45 条误拒；R7 该配置 Refusal 仅 0.8545（三配置最低）。</p></div>
+    <div class="rows">
+      <div class="row">
+        <h3 class="evidence">日志证据</h3>
+        <pre class="evidence">[2026-08-15 15:51:32] warning stage_timeout stage=retrieval timeout=5
+[2026-08-15 15:51:32] warning retrieval_stage_timeout query="员工每年带薪病假的上限是多少天？"
+[2026-08-15 15:51:32] info retrieval_complete mode=hybrid+rerank final_chunks=0 latency_ms=5001
+[2026-08-15 17:39:24] info refusal_triggered reason=low_confidence signal=0.3862 (chat)</pre>
+      </div>
+      <div class="row">
+        <h3 class="problem">根因分析</h3>
+        <p>全文 rerank 30 候选实测 ~5s；eval 并发 5 在 MPS 上争抢，排队的粗排 retrieval 要等前面的 rerank 释放 GPU 才轮到，粗排阶段超时（5s）→ <code>coarse_candidates=0</code> → 空 sources → RefusalCheck 规则 1 判 low_confidence。语义错误：把"没来得及搜"（超时）与"查无信息"（检索为空）归入同一条空结果规则。</p>
+      </div>
+      <div class="row">
+        <h3 class="fix">修复方案</h3>
+        <ul>
+          <li>rerank 输入截断 <code>input_truncate_chars=300</code>（全文 ~5s → ~1.5s）。</li>
+          <li><code>retrieval.timeout</code> 5s → 7s（给排队检索留余量）。</li>
+          <li>超时语义区分：检索超时返回"系统繁忙"降级话术，Refusal 计算排除超时样本。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="effect">
+      <div class="before-after">
+        <span class="ba before"><span class="lbl">修复前 Refusal</span><span class="num">0.8545</span></span>
+        <span class="arrow">→</span>
+        <span class="ba after"><span class="lbl">修复后 Refusal</span><span class="num">0.9909</span></span>
+      </div>
+      <span class="delta">+13.6pp（相对 +16.0%），误拒 45 → 14，阶段超时 19/12/8 → 0/0/0</span>
+    </div>
+  </article>
+
+  <article class="card">
+    <div class="head"><span class="issue-no">ISSUE-004</span><h2>OOS 漏拒：top1_sim 阈值区分不了"话题相似 OOS"</h2><span class="phase">拒答口径</span></div>
+    <div class="symptom"><span class="tag">问题现象</span><p>部分 OOS 样本未拒答，LLM 直接编造答案。R6 OOS 拒答率三配置仅 0.17 / 0.22 / 0.83；修复后 R9 三配置统一 1.0。</p></div>
+    <div class="rows">
+      <div class="row">
+        <h3 class="evidence">日志证据</h3>
+        <pre class="evidence"><span class="c"># R6 在册异常 #4（eval-history）</span>
+"38 个 OOS 样本 refused=False 漏过过滤，compliance -0.10"
+<span class="c"># postprocess.py RefusalCheck 规则 2：仅 top1_sim &lt; 0.45 判拒</span>
+"公司打印机卡纸怎么修" 类话题相似 OOS 实测 sim=0.59 &gt; 0.45 → 漏过</pre>
+      </div>
+      <div class="row">
+        <h3 class="problem">根因分析</h3>
+        <p>两层根因叠加：① 置信度阈值只认"向量相似度低"，但话题相似 OOS（公司内部设备维修/IT 类）与政策文档同域，top1_sim 天然偏高（0.59 &gt; 0.45），规则 2 无法拦截；② 大语料下检索不再为空，规则 1（空结果→拒答）失效。</p>
+      </div>
+      <div class="row">
+        <h3 class="fix">修复方案</h3>
+        <ul>
+          <li>安全/PII 关键词扩展（入侵/挖矿/防火墙/年薪/工资/Wi-Fi 密码，不含会误伤政策题的"密码"）。</li>
+          <li>注入检测前置：<code>detect_injection(query)</code> 最先判 safety。</li>
+          <li>OOS 软拒 judge：对 refused=False 的 OOS 样本，用 LLM judge 区分"软拒答"与"编造答案"。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="effect">
+      <div class="before-after">
+        <span class="ba before"><span class="lbl">修复前 OOS 拒答率</span><span class="num">0.7222</span></span>
+        <span class="arrow">→</span>
+        <span class="ba after"><span class="lbl">修复后 OOS 拒答率</span><span class="num">1.0</span></span>
+      </div>
+      <span class="delta">+27.8pp（相对 +38.5%），三配置统一 1.0</span>
+    </div>
+  </article>
+
+  <footer class="foot">
+    <p>数据来源：<code>deliverables/eval-history.md</code>（R6-R9 run 数据）、<code>workspace/logs/</code>（日志证据）。编号自 ISSUE-001（R2→R3，已归档）之后顺延，本页含 ISSUE-001~004。</p>
+  </footer>
+
+</div>
+</body>
+</html>

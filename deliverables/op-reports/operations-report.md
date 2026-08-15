@@ -44,6 +44,7 @@
 - **chat 缓存命中率（12.84%）显著高于 eval（0.95%）**：符合预期——eval 链路按设计做了缓存隔离（R8 修复项），确保评估不污染生产缓存；chat 侧自然流量有真实复用。
 - **refusal_rate 两分组均约 13-15%**：chat（14.53%）略高于 eval（13.19%），属同一量级；若需进一步归因可结合 `refusal_reason` 分布分析。
 - **P95 延迟（6002 / 6323 ms）明显高于 P50（2281 / 2167 ms）**：长尾明显，结合 `timeout`（44 次）、`degraded`（39 次）记录，重模型加载与慢生成是长尾主因；本报表未聚合该两项，如需可扩展。
+- **千次调用 Token 成本（R9 实测，per-config，见 evaluation-report §2.1）**：vector-only ¥3.15 / hybrid ¥2.52 / hybrid+rerank ¥2.53 —— 由 R9 实测 token 均值换算（deepseek-v4-flash 单价，本报表的 `avg_tokens` 为运行时聚合、无 prompt/completion 拆分，故引用评估报表的按配置估算）。
 
 ## 附：CSV
 
