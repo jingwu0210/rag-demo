@@ -57,7 +57,34 @@ print(len(s.collection.get(where={'is_active': True})['ids']))
     fi
 fi
 
-echo "启动 RAG QA Service: http://localhost:8000"
-echo "API 文档: http://localhost:8000/docs"
-# exec 继承上述 export（uvicorn startup 预热 BGE-Reranker 时经镜像下载模型）
-exec .venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000
+echo "🚀 启动 RAG QA Service..."
+# 后台启动（继承上述 export：uvicorn startup 预热 BGE-Reranker 经镜像下载模型）
+.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000 &
+SERVER_PID=$!
+
+# 等待健康检查通过（startup 含模型预热/下载，首次可能数分钟）
+READY=0
+for i in $(seq 1 300); do
+    if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+        READY=1
+        break
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        break
+    fi
+    if [ $((i % 30)) -eq 0 ]; then
+        echo "  ⏳ 仍在启动中…（首次运行需加载/下载模型，请耐心等待）"
+    fi
+    sleep 1
+done
+
+if [ "$READY" = "1" ]; then
+    echo "✅ 服务已就绪: http://localhost:8000"
+    echo "   API 文档:   http://localhost:8000/docs"
+    echo "   健康检查:   http://localhost:8000/health"
+    echo "   Ctrl+C 停止服务"
+else
+    echo "❌ 服务启动失败或超时，请检查日志后重试" >&2
+    exit 1
+fi
+wait "$SERVER_PID"
