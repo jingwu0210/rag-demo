@@ -29,6 +29,12 @@ fi
 # ── HuggingFace 镜像兜底（国内直连不可用；已设 HF_ENDPOINT 则尊重用户配置）──
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 
+# ── 代理兼容：镜像域名绕过系统代理直连（同 run.sh）──────────
+# 不可达的系统代理会让模型下载报 ProxyError；镜像直连即可达，DeepSeek API
+# 仍走用户代理（海外环境依赖代理时不受影响）。
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}pypi.tuna.tsinghua.edu.cn,hf-mirror.com"
+export no_proxy="$NO_PROXY"
+
 mkdir -p data/logs
 # 每次评估独立日志文件（带时间戳），不覆盖历史评估的日志证据
 LOG_FILE="data/logs/eval-$(date +%Y%m%d_%H%M%S).log"
