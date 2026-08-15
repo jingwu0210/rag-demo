@@ -29,6 +29,7 @@ logger = get_logger(module="eval.report")
 CSV_COLUMNS = ["config", "faithfulness", "context_precision", "answer_compliance",
                "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
                "avg_tokens", "avg_prompt_tokens", "avg_completion_tokens",
+               "cost_per_1000_calls",
                "avg_chunks", "timeout_rate", "unanswered_rate",
                "oos_refusal_rate", "normal_refusal_rate", "total_requests"]
 
@@ -45,6 +46,7 @@ _COLUMN_KEY = {
     "avg_tokens": "avg_tokens_per_call",
     "avg_prompt_tokens": "avg_prompt_tokens",
     "avg_completion_tokens": "avg_completion_tokens",
+    "cost_per_1000_calls": "cost_per_1000_calls",
     "avg_chunks": "avg_chunks_per_call",
     "timeout_rate": "timeout_rate",
     "unanswered_rate": "unanswered_rate",
@@ -122,16 +124,17 @@ def _write_markdown(results: List[dict], md_path: str) -> None:
              "> refusal_appropriateness 为纯规则四场景判定。",
              "",
              "| Config | Faithfulness | Context Precision | Answer Compliance | "
-             "Refusal Appropriateness | Style Consistency | P50 (ms) | P95 (ms) | Avg Tokens | Requests |",
+             "Refusal Appropriateness | Style Consistency | P50 (ms) | P95 (ms) | "
+             "Avg Tokens | 千次成本 (¥) | Requests |",
              "|--------|-------------|-------------------|-------------------|----------------------|"
-             "------------------|----------|----------|------------|----------|"]
+             "------------------|----------|----------|------------|------------|----------|"]
     for r in results:
         cfg = r.get("config_name", "")
         cells = [cfg]
         for col in ["faithfulness", "context_precision", "answer_compliance",
                     "refusal_appropriateness", "style_consistency",
                     "p50_latency_ms", "p95_latency_ms", "avg_tokens_per_call",
-                    "total_requests"]:
+                    "cost_per_1000_calls", "total_requests"]:
             val = r.get(col)
             cells.append("—" if val is None else f"{val:g}" if isinstance(val, float) else str(val))
         lines.append("| " + " | ".join(cells) + " |")
@@ -140,6 +143,9 @@ def _write_markdown(results: List[dict], md_path: str) -> None:
     # （OOS 样本不进 CP/Faith 计算但混在 refusal/unanswered 里，拆分后才能
     # 区分"OOS 防御能力"与"正常业务误拒"；Style 与检索配置正交的特性
     # 也在此注明：style 用于验证 Prompt 约束，不用于检索方案选型）
+    lines.append("")
+    lines.append("> 千次成本 = (实测 avg_prompt/1e6 × 输入单价 + avg_completion/1e6 × 输出单价) × 1000，")
+    lines.append("> 单价 ¥/百万 tokens 见 config `llm.price_input_per_m` / `llm.price_output_per_m`（设计文档 §7.5）。")
     lines.append("")
     lines.append("## 分层视图")
     lines.append("")

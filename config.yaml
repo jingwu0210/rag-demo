@@ -12,6 +12,9 @@ llm:
   api_key_env: DEEPSEEK_API_KEY    # 从环境变量读取，不在配置写密钥
   base_url: https://api.deepseek.com/v1
   timeout: 5                       # 单次 API 调用超时（秒）
+  price_input_per_m: 1.00          # 输入单价 ¥/百万 tokens（DeepSeek v4 Flash，§7.5）
+  price_output_per_m: 2.00         # 输出单价 ¥/百万 tokens（§7.5）。NFR-3.1 千次调用
+                                   # 成本估算消费者：eval/runner.py _cost_per_1000
 
 # ── Embedding 模型 ─────────────────────────────────────────
 embedding:

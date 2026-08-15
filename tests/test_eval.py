@@ -245,6 +245,21 @@ def test_judge_oos_refusal_returns_binary():
         assert _judge_oos_refusal(items) == [0, 0]   # judge 失败保守判 0
 
 
+def test_cost_per_1000_formula():
+    """NFR-3.1：千次成本 = (prompt/1e6×输入单价 + completion/1e6×输出单价) × 1000。
+
+    单价 ¥/百万 tokens（config llm.price_input_per_m / price_output_per_m）。
+    用实测 token 均值，坐实"eval.sh 聚合千次 cost"的自动化验收。
+    """
+    from eval.runner import _cost_per_1000
+    # 设计文档 §7.5 典型 1500 prompt + 400 completion → ¥2.30
+    assert _cost_per_1000(1500, 400, 1.00, 2.00) == 2.3
+    # 零 token → 0
+    assert _cost_per_1000(0, 0, 1.00, 2.00) == 0.0
+    # 纯输出（completion 单价更高）→ 1000/1e6 × 2.00 × 1000 = ¥2.00
+    assert _cost_per_1000(0, 1000, 1.00, 2.00) == 2.0
+
+
 # ═══ 3. 三配置对比 Runner ══════════════════════════════════
 
 def test_run_comparison_executes_three_configs(tmp_path):
@@ -293,6 +308,8 @@ def test_run_comparison_executes_three_configs(tmp_path):
         assert r["p95_latency_ms"] == 100
         # OOS 拒答无 token → (200*4 + 0) / 5
         assert r["avg_tokens_per_call"] == 160
+        # NFR-3.1：千次成本 = (80/1e6×1.00 输入 + 80/1e6×2.00 输出) × 1000 = ¥0.24
+        assert abs(r["cost_per_1000_calls"] - 0.24) < 1e-6
 
     # eval_history 表有 3 条记录
     rows = asyncio.run(_fetch_eval_rows("run_e2e"))
@@ -451,6 +468,7 @@ def test_generate_report_writes_csv_and_markdown(tmp_path):
     assert rows[0] == ["config", "faithfulness", "context_precision", "answer_compliance",
                        "refusal_appropriateness", "style_consistency", "p50_ms", "p95_ms",
                        "avg_tokens", "avg_prompt_tokens", "avg_completion_tokens",
+                       "cost_per_1000_calls",
                        "avg_chunks", "timeout_rate", "unanswered_rate",
                        "oos_refusal_rate", "normal_refusal_rate", "total_requests"]
     assert len(rows) == 4  # header + 3 config

@@ -150,9 +150,9 @@ def g(r, k, w=7):
         return f'{float(v):>{w}.4f}'
     except (TypeError, ValueError):
         return f'{v:>{w}}'
-print(f\"{'Config':<15} {'Faith':>7} {'CP':>7} {'Compl':>7} {'Refusal':>7} {'Style':>7} {'P95ms':>7}\")
+print(f\"{'Config':<15} {'Faith':>7} {'CP':>7} {'Compl':>7} {'Refusal':>7} {'Style':>7} {'P95ms':>7} {'¥/千次':>8}\")
 for r in rows:
-    print(f\"{r['config']:<15} {g(r,'faithfulness')} {g(r,'context_precision')} {g(r,'answer_compliance')} {g(r,'refusal_appropriateness')} {g(r,'style_consistency')} {g(r,'p95_ms',8)}\")
+    print(f\"{r['config']:<15} {g(r,'faithfulness')} {g(r,'context_precision')} {g(r,'answer_compliance')} {g(r,'refusal_appropriateness')} {g(r,'style_consistency')} {g(r,'p95_ms',8)} {g(r,'cost_per_1000_calls',8)}\")
 " 2>/dev/null || echo "（摘要读取失败，请查看报表文件）"
 echo "════════════════════════════════════════════"
 echo "   完整报表: workspace/results/eval_report.csv（Markdown: eval_report.md）"
