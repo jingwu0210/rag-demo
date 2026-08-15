@@ -103,7 +103,12 @@ def _ensure_ragas_llm() -> bool:
 
         base_url = ConfigRegistry.get("llm.base_url", "https://api.deepseek.com/v1")
         model = ConfigRegistry.get("eval.models.model", "deepseek-v4-flash")
-        llm = LangchainLLMWrapper(ChatOpenAI(model=model, api_key=api_key, base_url=base_url))
+        # deepseek-v4-flash 默认开启思考模式，Ragas judge（faithfulness/CP）在长
+        # prompt（chunk 全文+answer）上推理极慢（评估实测 4 分钟仅 27% 的瓶颈）。
+        # 显式关闭思考，对齐 _judge_llm_call 与 generator 的非思考行为。
+        llm = LangchainLLMWrapper(ChatOpenAI(
+            model=model, api_key=api_key, base_url=base_url,
+            extra_body={"thinking": {"type": "disabled"}}))
         _ragas_faithfulness.llm = llm
         _ragas_context_precision.llm = llm
         _RAGAS_LLM_READY = True
@@ -186,6 +191,19 @@ COMPLIANCE_JUDGE_PROMPT = """你是合规打分裁判。给定【参考文档片
 模型回答：
 {llm_answer}"""
 
+OOS_REFUSAL_JUDGE_PROMPT = """你是拒答裁判。给定【用户问题】（超出知识库范围）和【系统回答】，判断系统是否恰当处理了这个问题。
+
+恰当处理（输出 1）：系统明确表示无法回答/超出范围/不提供此类信息，未编造答案。可以附带提供知识库中的相关信息（如合规条款、流程说明）。
+编造答案（输出 0）：系统直接回答了本应拒绝的问题，编造了内容（如写了诗、预测了股价、推荐了餐厅、给出了具体维修步骤等）。
+
+只输出 0 或 1。
+
+用户问题：
+{question}
+
+系统回答：
+{answer}"""
+
 STYLE_RUBRIC_PROMPT = """你是写作风格裁判。对照以下企业知识库回答规范，给回答打 1-5 分：
 规范：正式企业话术、结论先行、分点/结构化排版、引用来源标注、无口语化表达。
 5=完全符合规范，4=基本符合，3=部分符合，2=明显偏离，1=完全不符合。
@@ -262,6 +280,21 @@ def _judge_compliance(answers_chunks: List[tuple]) -> List[Optional[tuple]]:
     if not prompts:
         return []
     return asyncio.run(_judge_batch_async(prompts))
+
+
+def _judge_oos_refusal(items: List[tuple]) -> List[int]:
+    """OOS 拒答裁判（2026-08-16）：判断 OOS 样本是否"恰当处理"。
+
+    硬拒（refused=True）由规则层直接判 1，不进此函数；这里只判断 refused=False
+    且非超时的 OOS 样本——区分"软拒答"（无法回答+提供相关信息，=1）与"编造答案"
+    （直接回答本应拒绝的问题，=0）。judge 失败保守判 0。
+    """
+    prompts = [OOS_REFUSAL_JUDGE_PROMPT.format(
+        question=q, answer=a[:2000]) for q, a in items]
+    if not prompts:
+        return []
+    results = asyncio.run(_judge_batch_async(prompts))
+    return [r[0] if r is not None else 0 for r in results]
 
 
 def _judge_style_absolute(answers: List[str]) -> List[Optional[int]]:
@@ -418,6 +451,21 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
 
         qa_results = asyncio.run(
             asyncio.gather(*[_one(i) for i in test_set]))
+
+        # ── OOS 软拒 judge（聚合前）：识别"软拒答"为正确，区别于"编造"──
+        # 硬拒（refused=True）规则层已判 1；这里只重判 refused=False 且非超时的
+        # OOS 样本——软拒答（无法回答+提供信息）→ 1，编造答案 → 0。
+        oos_candidates = [(qa["question"], qa["answer"]) for qa in qa_results
+                          if qa["is_out_of_scope"] and not qa["refused"]
+                          and not qa["timeout"]]
+        if oos_candidates:
+            oos_scores = _judge_oos_refusal(oos_candidates)
+            _idx = 0
+            for qa in qa_results:
+                if (qa["is_out_of_scope"] and not qa["refused"]
+                        and not qa["timeout"]):
+                    qa["refusal_appropriateness"] = oos_scores[_idx]
+                    _idx += 1
 
         # ── 聚合 ──
         per_qa: List[dict] = []
