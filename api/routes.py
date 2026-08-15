@@ -2,19 +2,17 @@
 
 - /chat：请求级并发控制（guard.acquire → 429 + Retry-After）+ 硬超时（with_request_timeout → partial）
 - /ingest：同步冷路径（OCR/embedding）用 run_in_threadpool 移出事件循环
-- /eval/run /eval/result /report：评估触发/结果查询/运营报表（I-2 终审接线，原 501 stub）
+- /eval/result /report：评估结果查询/运营报表（I-2 终审接线，原 501 stub）
 - /health：组件探测 + 并发占用
 
 依赖注入：服务实例一律经 request.app.state 访问（测试可整体替换），无模块级全局。
 """
 from __future__ import annotations
 
-import asyncio
 import csv
 import io
 import json
 import os
-import time
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -209,43 +207,7 @@ async def ingest(request: Request,
     )
 
 
-# ── 3-5. 评估触发 / 结果查询 / 运营报表（I-2 终审接线）──────
-
-# 后台评估任务句柄（防 GC 回收导致任务中断）；完成即移除
-_PENDING_EVAL_TASKS: set = set()
-
-
-def _run_eval_job(chat_service, run_id: str) -> None:
-    """后台线程执行三配置评估。
-
-    注意：run_comparison 内部用 asyncio.run 驱动 chat_service.process — 不能跑在
-    事件循环线程（嵌套 asyncio.run 会 RuntimeError），经 asyncio.to_thread 移出
-    事件循环是必需的（与 /ingest 的 run_in_threadpool 同理）。任何失败只记日志，
-    结果仍可从 GET /eval/result 查询（已有部分写入 eval_history 的记录照常返回）。
-    """
-    try:
-        from eval.runner import run_comparison
-        from eval.test_set import load_test_set
-        test_set = load_test_set(ConfigRegistry.get("eval.test_set_path"))
-        run_comparison(chat_service, test_set, run_id=run_id)
-        logger.info("eval_run_finished", run_id=run_id)
-    except Exception as exc:
-        logger.error("eval_run_failed", run_id=run_id, error=str(exc), exc_info=True)
-
-
-@router.post("/eval/run")
-async def eval_run(request: Request):
-    """触发评估：生成 run_id → 后台线程执行三配置评估 → 立即返回 202 {run_id}"""
-    chat_service = getattr(request.app.state, "chat_service", None)
-    if chat_service is None:
-        raise HTTPException(status_code=503, detail="服务未就绪：chat_service 未初始化")
-    run_id = "eval_{}_{}".format(time.strftime("%Y%m%d_%H%M%S"), uuid.uuid4().hex[:8])
-    task = asyncio.create_task(asyncio.to_thread(_run_eval_job, chat_service, run_id))
-    _PENDING_EVAL_TASKS.add(task)
-    task.add_done_callback(_PENDING_EVAL_TASKS.discard)
-    logger.info("eval_run_started", run_id=run_id)
-    return JSONResponse(status_code=202, content={"run_id": run_id})
-
+# ── 3-4. 评估结果查询 / 运营报表（I-2 终审接线）──────────
 
 async def _fetch_eval_history(run_id: Optional[str]) -> List[dict]:
     """查 eval_history：指定 run_id → 该 run 全部 config 行；None → 最近一次 run。"""
@@ -498,6 +460,10 @@ async def logs(file: Optional[str] = None, lines: int = 200):
 # 表名白名单：仅六张业务表可浏览，杜绝任意表名注入
 _DB_TABLES = ("cache_entries", "eval_history", "request_metrics",
               "turns", "sessions", "ingest_log")
+# source 值域：三类区分（chat/eval/ingest）。ingest 仅对 ingest_log 表有"整表即 ingest 操作记录"
+# 的语义——但 ingest_log 无 source 列，后端对无 source 列表忽略 source 参数返回全量（切 Ingest 时
+# 该表显示全量）。合法值之外的 source → 422，防止前端误传拼凑出无意义的过滤语义。
+_DB_SOURCES = ("chat", "eval", "ingest")
 _MAX_DB_ROWS = 200
 _MAX_CELL_CHARS = 500
 
@@ -524,9 +490,12 @@ def _source_filter_sql(info, source: Optional[str]):
 async def db_tables(source: Optional[str] = None):
     """表清单：{tables: [{name, rows, has_source}, ...]}（rows=行数；表缺失视为 0，不中断）。
 
-    source（可选）：'chat'/'eval'，仅对含 source 列的表（request_metrics / turns）按 source
+    source（可选）：'chat'/'eval'/'ingest'，仅对含 source 列的表（request_metrics / turns）按 source
     等值过滤统计行数；无 source 列的表（cache_entries/eval_history/sessions/ingest_log）
-    忽略该参数返回全表行数（"全部"视角）。has_source 供前端判断"行数不分来源"的弱化提示。"""
+    忽略该参数返回全表行数（"全部"视角）。ingest 对 ingest_log 表无意义——该表无 source 列，
+    切 Ingest 时显示全量。非法 source 值 → 422。has_source 供前端判断"行数不分来源"的弱化提示。"""
+    if source is not None and source not in _DB_SOURCES:
+        raise HTTPException(status_code=422, detail=f"未知来源：{source}")
     db = await get_db()
     try:
         tables = []
@@ -571,8 +540,11 @@ async def db_table(table_name: str, limit: int = 50, offset: int = 0,
 
     rows 按 rowid 降序（最新在前）；offset 分页（offset≥0）；q 对 TEXT 列 LIKE 包含过滤，
     total=过滤后总行数（与分页联动）。表名不在白名单 → 404。
-    source（可选）：'chat'/'eval'，仅对含 source 列的表生效（如 request_metrics / turns），
-    按 source 列等值过滤；无 source 列的表忽略该参数返回全部（"全部"视角）。"""
+    source（可选）：'chat'/'eval'/'ingest'，仅对含 source 列的表生效（如 request_metrics / turns），
+    按 source 列等值过滤；无 source 列的表忽略该参数返回全部（"全部"视角）。
+    ingest 对 ingest_log 表无意义（该表无 source 列，切 Ingest 时显示全量）；非法 source 值 → 422。"""
+    if source is not None and source not in _DB_SOURCES:
+        raise HTTPException(status_code=422, detail=f"未知来源：{source}")
     if table_name not in _DB_TABLES:
         raise HTTPException(status_code=404, detail=f"未知表：{table_name}")
     n = min(max(limit, 1), _MAX_DB_ROWS)

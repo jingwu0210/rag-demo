@@ -62,7 +62,6 @@ export PIP_INDEX_URL=https://pypi.org/simple
 |------|------|
 | POST /chat | 多轮问答（query + 可选 session_id） |
 | POST /ingest | 文档入库（file + doc_type + version） |
-| POST /eval/run | 触发评估任务（后台执行，立即返回 202 + run_id） |
 | GET /eval/result | 查询评估结果（?run_id=；缺省返回最近一次） |
 | GET /report | 运营报表（request_metrics 聚合 CSV） |
 | GET /health | 健康检查 |
