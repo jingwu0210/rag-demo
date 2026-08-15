@@ -192,16 +192,15 @@ logging:
   level: INFO
   format: json
   output: file
-  log_dir: data/logs
+  log_dir: workspace/logs
   rotation: 10MB
   retention: 7
 
 # ── 评估 ──────────────────────────────────────────────────
 eval:
-  test_set_path: assets/testsets/test_set_v2.json  # v1.13 起默认 80 条 v2 测试集
-                                             # （条数以测试集文件自决；回退 65 条 v1
-                                             # 用 override 指向 test_set.json，
-                                             # 但对比需按公共子集口径）
+  test_set_path: assets/testsets/test_set_archived_v2.json  # 演示语料配套测试集（80 条）
+                                             # 新语料 baseline 测试集建成后改回 test_set.json；
+                                             # 历史测试集归档于 test_set_archived_v1/v2
   models:
     provider: deepseek
     model: deepseek-chat
@@ -220,7 +219,7 @@ eval:
     - hybrid
     - hybrid+rerank
   concurrency: 5                   # 评估并发度（问答并发 + judge 并发，v1.7）
-  result_dir: data/eval/results
+  result_dir: workspace/results
 
 # ── 存储路径（v1.15 分层：assets = 版本化资产进 git；workspace = 机器状态忽略）──
 paths:
