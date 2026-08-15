@@ -6,7 +6,7 @@
 # ── LLM 生成模型 ──────────────────────────────────────────
 llm:
   provider: deepseek               # deepseek | qwen | glm
-  model: deepseek-chat             # DeepSeek Flash
+  model: deepseek-v4-flash         # DeepSeek v4 Flash（2026-07-24 起 deepseek-chat 别名停服）
   temperature: 0.1                 # RAG 场景低温度
   max_tokens: 1024
   api_key_env: DEEPSEEK_API_KEY    # 从环境变量读取，不在配置写密钥
@@ -58,6 +58,9 @@ retrieval:
     bm25_weight: 0.8          # P2a: BM25 路软降权（保留术语强命中的机会）
     vector_sim_threshold: 0.45  # P2c: 融合后 vec_sim 硬过滤（实测依据：术语类 17 条答案依据
                                  # chunk 余弦全部 ≥0.4781，0.45 零误杀；普通中文样本全部 >0.45）
+    bm25_exempt_rank: 3         # P2d: BM25 精确命中（rank≤3）豁免向量过滤——口语短问句
+                                 # 向量分崩（实测"公司年假有几天"top1=0.236）但 BM25 命中
+                                 # "年假"；rank>3 的 BM25 噪声仍被向量过滤拦截
   adaptive:
     enabled: true
     min_score: 0.45                # vector-only 用：余弦相似度阈值（0-1 有绝对语义）
@@ -218,7 +221,7 @@ eval:
                                              # 历史测试集归档于 test_set_archived_v1/v2（演示语料配套）
   models:
     provider: deepseek
-    model: deepseek-chat
+    model: deepseek-v4-flash
   ragas:
     metrics:
       - faithfulness

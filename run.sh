@@ -139,7 +139,10 @@ fi
 
 # ── ③ 启动服务 ──────────────────────────────────────────
 echo "🚀 启动 RAG QA Service..."
-.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000 &
+# stdout/stderr 分别落盘 workspace/logs/run-<时间戳>.log / .stderr.log，
+# Maintenance > Logs 页即可查看 chat 请求日志（/logs 接口读该目录）
+RUN_LOG="workspace/logs/run-$(date +%Y%m%d-%H%M%S)"
+.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000 > "${RUN_LOG}.log" 2> "${RUN_LOG}.stderr.log" &
 SERVER_PID=$!
 
 READY=0
@@ -162,6 +165,8 @@ if [ "$READY" = "1" ]; then
     echo "   演示 UI:     http://localhost:8000/rag-gen-ai-service-demo"
     echo "   API 文档:   http://localhost:8000/docs"
     echo "   健康检查:   http://localhost:8000/health"
+    echo "   服务日志:   ${RUN_LOG}.log（stderr: ${RUN_LOG}.stderr.log）"
+    echo "   评估日志:   workspace/logs/（eval-*.log，Maintenance > Logs 可选）"
     echo "   Ctrl+C 停止服务"
 else
     echo "❌ 服务启动失败或超时，请检查日志后重试" >&2

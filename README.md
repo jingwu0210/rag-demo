@@ -111,7 +111,7 @@ HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py --wi
 
 - 分层：API (FastAPI) → Service (编排) → Core (引擎) → Storage (ChromaDB/SQLite)
 - 检索：vector-only / hybrid / hybrid+rerank 三模式配置切换（RRF k=60 + AdaptiveK）
-- 模型：BGE-M3 本地 Embedding/Reranker + DeepSeek Flash API 生成（Adapter 可替换）
+- 模型：BGE-M3 本地 Embedding/Reranker + DeepSeek v4 Flash API 生成（Adapter 可替换）
 - 安全：注入扫描 + Prompt 沙箱 + PII 脱敏 + 拒答三规则
 - 观测：structlog JSON 全链路日志 + request_metrics 运营指标
 
