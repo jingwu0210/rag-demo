@@ -490,8 +490,6 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             "total_requests": len(test_set),
             "faithfulness": _round_mean(faithfulness_scores),
             "context_precision": _round_mean(precision_scores),
-            "context_recall": None,
-            "answer_relevancy": None,
             # Compliance: score/5 连续分取均值（4 分贡献 0.8）
             # v1.10: judge 0 分参与均值（有答案但未回答 = 生成质量缺陷）
             "answer_compliance": (_round_mean(compliance_scores) / 5
@@ -543,16 +541,16 @@ async def _save_eval_history(agg: dict) -> None:
     try:
         await db.execute(
             "INSERT INTO eval_history (run_id, config_name, test_set_hash, total_qa_pairs, "
-            "faithfulness, context_precision, context_recall, answer_relevancy, "
+            "faithfulness, context_precision, "
             "answer_compliance, style_consistency, refusal_appropriateness, "
             "p50_latency_ms, p95_latency_ms, avg_tokens_per_call, "
             "total_pii_redactions, total_injections_blocked, timeout_rate, "
             "avg_prompt_tokens, avg_completion_tokens, avg_chunks_per_call, "
             "unanswered_rate, per_qa_results_json) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (agg["run_id"], agg["config_name"], agg["test_set_hash"], agg["total_requests"],
-             agg["faithfulness"], agg["context_precision"], agg["context_recall"],
-             agg["answer_relevancy"], agg["answer_compliance"], agg["style_consistency"],
+             agg["faithfulness"], agg["context_precision"],
+             agg["answer_compliance"], agg["style_consistency"],
              agg["refusal_appropriateness"], agg["p50_latency_ms"], agg["p95_latency_ms"],
              agg["avg_tokens_per_call"], agg["total_pii_redactions"],
              agg["total_injections_blocked"], agg["timeout_rate"],

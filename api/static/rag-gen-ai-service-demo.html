@@ -489,7 +489,7 @@
       </div>
       <!-- 评估结果查询 -->
       <div class="panel">
-        <div class="panel-head"><span class="k">评估结果</span><span class="desc">六指标对比 + 分层视图 + per_qa 明细</span></div>
+        <div class="panel-head"><span class="k">评估结果</span><span class="desc">五指标对比 + 分层视图 + per_qa 明细</span></div>
         <div class="panel-body">
           <div class="query-row">
             <input type="text" id="evalRunId" placeholder="run_id（留空 = 最近一次）">
@@ -1125,15 +1125,13 @@ $("ingestBtn").addEventListener("click", submitIngest);
 /* 指标元信息（中文标签 + 0-1 百分比格式 + 分层归属） */
 const METRICS = {
   faithfulness:            { label: "忠实度",        layer: "生成质量" },
-  answer_relevancy:        { label: "答案相关性",    layer: "生成质量" },
   context_precision:       { label: "上下文精确率",  layer: "检索质量" },
-  context_recall:          { label: "上下文召回率",  layer: "检索质量" },
   answer_compliance:       { label: "合规性",        layer: "合规行为" },
   style_consistency:       { label: "风格一致性",    layer: "合规行为" },
   refusal_appropriateness: { label: "拒答恰当性",    layer: "合规行为" },
 };
-const SIX_METRICS = ["faithfulness", "context_precision", "context_recall",
-  "answer_relevancy", "answer_compliance", "refusal_appropriateness"];
+const FIVE_METRICS = ["faithfulness", "context_precision", "answer_compliance",
+  "style_consistency", "refusal_appropriateness"];
 const LAYERS = ["生成质量", "检索质量", "合规行为"];
 const PERF_METRICS = [
   ["p50_latency_ms",       "P50 延迟 (ms)"],
@@ -1173,7 +1171,7 @@ async function loadEvalMeta(){
   }catch(err){ /* 尚无评估记录 */ }
 }
 
-/* 六指标对比表：行=指标，列=配置 */
+/* 五指标对比表：行=指标，列=配置 */
 function renderCompareTable(rows){
   const box = el("div", "tbl-wrap");
   const t = el("table", "");
@@ -1183,7 +1181,7 @@ function renderCompareTable(rows){
   rows.forEach(r => hr.append(el("th", "", r.config_name || "—")));
   thead.append(hr);
   const tbody = el("tbody");
-  SIX_METRICS.forEach(m => {
+  FIVE_METRICS.forEach(m => {
     const tr = el("tr");
     tr.append(el("td", "", METRICS[m].label));
     rows.forEach(r => {

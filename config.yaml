@@ -233,8 +233,6 @@ eval:
     metrics:
       - faithfulness
       - context_precision
-      - context_recall
-      - answer_relevancy
   custom_metrics:
     answer_compliance: true
     style_consistency: true

@@ -97,6 +97,7 @@
 | v1.14 | 2026-08-15 | 一键交付契约：唯一外部依赖 = DeepSeek API Key。run.sh/eval.sh 增加 key 前置检查（缺失明确报错）、HF_ENDPOINT/PIP_INDEX_URL 镜像兜底（默认国内镜像、环境变量可 override）、**代理兼容（镜像域名 NO_PROXY 绕过系统代理，DeepSeek API 仍走用户代理）**、**空库引导双路（assets/corpus/ 已有用户文档 → 直接入库用户语料不生成演示语料；无用户文档 → 生成演示语料）**、eval.sh 增加 venv/知识库前置检查；测试集默认切换 v2；日志 JSONRenderer ensure_ascii=False（中文直接可读，与字段字典样例一致）；R5 实测闭环 max_workers 5 的 MPS 无退化假设 |
 | v1.15 | 2026-08-15 | 目录分层重构（assets/workspace）：assets = 版本化资产进 git（corpus 语料源 / testsets 测试集 / chroma 预置向量索引）；workspace = 机器状态忽略（ocr / logs / results / cache.db）。config paths 段全改，代码/脚本/文档全部引用点同步（铁律 8） |
 | v1.16 | 2026-08-15 | R6 归因修复（F1-F4）+ 参数调整：F1 空格 PDF 根治（china-s 渲染拉丁字符插空格的根因 → 块级双字体渲染，generate_corpus 与语料 PDF 同步修复重灌，R6 实测该缺陷致 16 题×3 配置 CP=0 占损失 50.8%）；F2 OOS 显式排除出 compliance judge（大语料下 RefusalCheck 空结果层失效，38 个 OOS 样本 refused=False 漏过过滤）；F3 PII pattern 扩展（银行卡 Luhn/国际电话/生日——R6 暴露卡号明文回显与美式电话不匹配）；F4 judge 盲区约束（检索片段 ≠ 语料全文，条款不在片段中不得判编造 + PII 脱敏视为正确）；max_chunks 8→10（答案 chunk 常落第 5-8 位）；expire 默认开启（legacy 曾排检索第 1 位）；§9.2 挂账两项（拒答机制对半相关召回敏感度 / 单文档下架）+ 多轮评估 Evolvability；eval.sh 结果摘要打印终端 |
+| v1.17 | 2026-08-15 | 移除从未实现的 Ragas 指标 context_recall / answer_relevancy（config 声明但 runner 恒 None）：config.yaml eval.ragas.metrics 删两行；eval_history 表 schema / INSERT / SELECT 全引用点删除（旧库保留两列恒 NULL 兼容）；前端五指标对比表（FIVE_METRICS 含 style_consistency）；§6.3 评测体系维持五大指标不变（本就在 5 项真实计算指标口径上） |
 
 ---
 
@@ -2448,8 +2449,6 @@ CREATE TABLE eval_history (
     -- 核心指标
     faithfulness         REAL,
     context_precision    REAL,
-    context_recall       REAL,
-    answer_relevancy     REAL,
     answer_compliance    REAL,
     style_consistency    REAL,
     refusal_appropriateness REAL,
