@@ -128,11 +128,15 @@ class Reranker:
     def _rerank_impl(self, query: str, candidates: List[ScoredDoc],
                      top_n: Optional[int]) -> List[ScoredDoc]:
         model = self._ensure_model()
-        # 输入截断 200 字符（性能实测驱动：真实候选 15 条 sum=6231 字符 → 全文推理
-        # 2248ms 超 2s 超时预算 → 评估日志大量 rerank_degraded）。
-        # 相关性判断的黄金信号在 chunk 开头：chunker 注入了 heading_path 前缀
-        # （[标题路径]），200 字符覆盖标题 + 段落开头，截断后预计 ~900ms。
-        pairs = [(query, doc.text[:200]) for doc in candidates]
+        # 输入截断（配置化，R15）：R7 验证 200 char 截断切掉答案信号——
+        # gift register 答案 chunk 全文 rerank 第 3 名 vs 截断第 8 名；且"黄金信号
+        # 在 chunk 开头"是未实测假设（铁律 6），条款式文档答案句常在 chunk 后段。
+        # 历史性能约束：15 候选全文 2248ms 超 2s 预算 → 截断为配置项，默认 800。
+        truncate = int(ConfigRegistry.get("reranker.input_truncate_chars", 0))
+        # 0 = 全文不截断（A 方案：答案句深在 chunk 后段，任何短截断都会切掉答案信号——
+        # 实测 gift register 答案 chunk 200 char 截断第14 vs 全文第1）
+        pairs = [(query, doc.text[:truncate] if truncate > 0 else doc.text)
+                 for doc in candidates]
         scores = model.predict(pairs)
         # predict 返回形状可能为 (n,) 或 (n, 1)，统一展平
         flat = scores.ravel() if hasattr(scores, "ravel") else list(scores)

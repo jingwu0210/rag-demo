@@ -26,11 +26,18 @@ reranker:
   enabled: true                    # false = 全部走 hybrid 不重排
   model: BAAI/bge-reranker-v2-m3
   device: mps
-  top_n: 5
+  top_n: 7                          # R7 残余 #1：同文档多 chunk 争 5 个位子，答案条款
+                                     # 挤不进 top5（6 条 CP<0.5 实证）→ 7 给同文档条款留位；
+                                     # 代价 prompt 多 2 chunks（~40%）
+  input_truncate_chars: 0          # rerank 输入截断（0=全文不截断，A 方案）：R7 验证
+                                     # 答案句深在 chunk 后段（gift register 答案在 658 char /
+                                     # 总长 926），200/400/600 char 截断均切不到，仅全文能使
+                                     # 答案 chunk 排第 1（分数 0.81）；代价 30 候选全文 ~5s
   candidates_multiplier: 1.5        # 粗排候选 = top_k(20) × 1.5 = 30。
                                      # 60 候选（×3）推理 ~1.8s 贴死 2s 超时 → 频繁降级
                                      # （评估日志实测）；30 候选 ~0.9s 留 1.1s 余量
-  timeout: 2
+  timeout: 5                         # A 方案：全文 rerank 30 候选 ~5s，预算从 2s 提到 5s
+                                     # （P95 预期 7-8s，仍在 10s SLA 内但余量收紧）
   max_workers: 5                    # R8 容量模型（R4 实测 T=816ms/30候选）：
                                      # 最坏延迟 = ceil(并发/worker) × T ≤ 2s 预算
                                      # 5 并发 → 1 轮 = 0.82s；10 并发（Semaphore 上限）
@@ -134,15 +141,15 @@ pii:
     - name: ip_address
       regex: "\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"
       replacement: "***[REDACTED_IP]***"
-    # R13 F3 扩展：R6 暴露两个脱敏漏洞——银行卡号（Luhn 测试号）明文回显、
-    # 国际电话格式（+1 (415) 555-2671）不匹配中国手机 pattern。按"数字格式
-    # 特征"匹配而非字段名（字段名枚举无法穷尽）。
-    - name: bankcard
-      regex: "(?<!\\d)\\d{13,19}(?!\\d)"
-      replacement: "***[REDACTED_CARD]***"
+    # R13 F3 扩展 + R7 残余修复：R7 实测发现带格式的卡号/电话仍明文回显——
+    # "4111 1111 1111 1111"（分组卡号）与 "+1 (415) 555-2671"（带括号国际电话）
+    # 不匹配初版 pattern。按"数字格式特征"匹配而非字段名。
     - name: intl_phone
-      regex: "\\+(?:[0-9][\\s\\-()]?){7,14}[0-9]"
+      regex: "\\+\\d[\\d\\s\\-()]{6,18}\\d"
       replacement: "***[REDACTED_PHONE]***"
+    - name: bankcard
+      regex: "(?<!\\d)(?:\\d[ -]?){12,18}\\d(?!\\d)"
+      replacement: "***[REDACTED_CARD]***"
     - name: birth_date
       regex: "(19|20)\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])"
       replacement: "***[REDACTED_DATE]***"
