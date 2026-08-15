@@ -92,7 +92,7 @@ async def init_db() -> None:
             run_id TEXT NOT NULL, config_name TEXT NOT NULL,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, test_set_hash TEXT NOT NULL,
             total_qa_pairs INTEGER,
-            faithfulness REAL, context_precision REAL, context_recall REAL, answer_relevancy REAL,
+            faithfulness REAL, context_precision REAL,
             answer_compliance REAL, style_consistency REAL, refusal_appropriateness REAL,
             p50_latency_ms INTEGER, p95_latency_ms INTEGER, avg_tokens_per_call INTEGER,
             total_pii_redactions INTEGER DEFAULT 0, total_injections_blocked INTEGER DEFAULT 0,

@@ -47,7 +47,7 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 |------|---------|---------|
 | 💬 Chat | POST /chat | 请求级检索模式切换、多轮会话（localStorage）、答案/来源/prompt 展示 |
 | 📥 Ingest | POST /ingest | 拖拽上传 + doc_type/version 参数、入库结果卡片 |
-| 🚀📊 Eval | GET /eval/result | 结果只读展示：六指标对比 + 分层视图 + per_qa 明细（评估走 eval.sh） |
+| 🚀📊 Eval | GET /eval/result | 结果只读展示：五指标对比 + 分层视图 + per_qa 明细（评估走 eval.sh） |
 | 📈 Report | GET /report | CSV 前端解析、KPI 卡片 + 全量指标表 |
 | 🔧 Maintenance | GET /health、GET /logs、GET /db/tables、GET /db/table/{name} | 三子 tab：Health / Logs / Database |
 | ⚙️ Config | GET /config | config.yaml 只读树，分组折叠 |
@@ -84,7 +84,7 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 - 查询行：run_id 输入框（留空 = 最近一次）+ "加载 per_qa 明细" checkbox（默认勾选，映射 detail=true）+ 查询按钮（Enter 亦可触发）
 - 渲染顺序：
   1. 摘要条：run_id / 时间 / 测试集条数 / test_set_hash 前 8 位
-  2. 六指标对比表：行 = 指标（faithfulness、context_precision、context_recall、answer_relevancy、answer_compliance、refusal_appropriateness），列 = 配置；数值 0-1 按百分比格式化，缺失显示 "—"
+  2. 五指标对比表：行 = 指标（faithfulness、context_precision、answer_compliance、style_consistency、refusal_appropriateness），列 = 配置；数值 0-1 按百分比格式化，缺失显示 "—"
   3. 分层视图：生成质量 / 检索质量 / 合规行为三组（层行 + 指标行），加性能层（P50/P95 延迟、平均 token/请求）
   4. per_qa 明细：按 config 分组折叠，组头统计"条数 · 拒答 n · 超时 n"
 - **per_qa 条目**：judge 评分徽章（0 分红 / ≥4.5 绿 / 中间琥珀 / 无评分灰，悬停显示 judge_reason）+ 状态标记（⛔拒答 / ⏱超时 / 💾缓存）+ faith/prec 摘要；展开显示 9 行明细：问题、答案（可滚动）、judge 理由、faithfulness、context_precision、refusal_appropriateness、拒答（含原因）、延迟与 token、来源数与 OOS
@@ -141,7 +141,7 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 
 - 参数：`run_id`（缺省 = 最近一次 run）、`detail`（true → 追加 per_qa）
 - 响应：`{run_id, results: [指标行按 config_name 排序], per_qa?: {config_name: [per_qa 条目]}}`
-- results 行字段：run_id、config_name、timestamp、test_set_hash、total_qa_pairs、faithfulness、context_precision、context_recall、answer_relevancy、answer_compliance、style_consistency、refusal_appropriateness、p50_latency_ms、p95_latency_ms、avg_tokens_per_call、total_pii_redactions、total_injections_blocked
+- results 行字段：run_id、config_name、timestamp、test_set_hash、total_qa_pairs、faithfulness、context_precision、answer_compliance、style_consistency、refusal_appropriateness、p50_latency_ms、p95_latency_ms、avg_tokens_per_call、total_pii_redactions、total_injections_blocked
 - per_qa 条目字段：question、answer、refused、refusal_reason、from_cache、timeout、faithfulness、context_precision、refusal_appropriateness、answer_compliance、judge_reason（"分数|理由"）、latency_ms、tokens_total、sources_count、is_out_of_scope 等（不含 chunks_text）
 - 无记录：`{run_id: null, results: []}`
 

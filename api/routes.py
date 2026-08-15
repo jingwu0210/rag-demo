@@ -223,7 +223,7 @@ async def _fetch_eval_history(run_id: Optional[str]) -> List[dict]:
             run_id = row["run_id"]
         cur = await db.execute(
             "SELECT run_id, config_name, timestamp, test_set_hash, total_qa_pairs, "
-            "faithfulness, context_precision, context_recall, answer_relevancy, "
+            "faithfulness, context_precision, "
             "answer_compliance, style_consistency, refusal_appropriateness, "
             "p50_latency_ms, p95_latency_ms, avg_tokens_per_call, "
             "total_pii_redactions, total_injections_blocked "
