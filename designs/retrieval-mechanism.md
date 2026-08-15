@@ -105,8 +105,8 @@ query → 向量/BM25 粗排候选池 top30（top_k 20 × candidates_multiplier 
 
 - **现象**：R7 发现带格式的卡号（`4111 1111 1111 1111`）与国际电话（`+1 (415) 555-2671`）明文回显
 - **根因**：初版 bankcard/intl_phone pattern 只匹配纯数字串，不匹配空格分组/括号格式
-- **修复**：R15 更新 pattern（intl_phone 含括号、bankcard 覆盖空格分组），待重跑验证
-- **残余风险**：数字格式枚举仍有盲区（其他分隔符如 `/`、`.`
+- **修复**：R15 更新 pattern（intl_phone 含括号、bankcard 覆盖空格分组），R8/R9 已验证（config pii.patterns 8 条）
+- **残余风险**：数字格式枚举仍有盲区（其他分隔符如 `/`、`.` 等）
 
 ### 3.5 拒答机制对半相关召回敏感度（R6 挂账）
 

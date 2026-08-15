@@ -106,13 +106,15 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 
 **📜 Logs 子 tab**
 
-- 日志文件下拉（*.log，排除 *.stderr.log，按修改时间倒序）+ 行数选择（50 / 200 / 1000 / 5000）+ 加载按钮
+- 日志来源过滤（全部 / Chat / Eval / Ingest，前端按文件名前缀 run- / eval- / ingest 本地过滤）+ 日志文件下拉（*.log，排除 *.stderr.log，按修改时间倒序）+ 行数选择（50 / 200 / 1000 / 5000）+ 加载按钮
 - 深色终端风 tail 块（等宽字体、绿色文字）；响应兼容多种形态（见 §6）
 
 **🗄️ Database 子 tab**
 
+- 来源过滤（全部 / Chat / Eval / Ingest）：仅对含 source 列的表（request_metrics / turns）生效；无 source 列的表（cache_entries / eval_history / sessions / ingest_log）显示全量，并弱化提示"不分来源"（`has_source` 字段）
 - 表清单：六张业务表按钮（表名 + 行数），点击加载预览
 - 预览卡片：列名表头 + 行数据（最多显示 100 行，超长单元格省略并悬停显示全文）+ "← 返回表清单"按钮
+- "🗑️ 清空缓存"按钮 → POST /cache/clear（只清 cache_entries，铁律 10）
 
 ### 4.6 ⚙️ Config（GET /config）
 
@@ -153,12 +155,13 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 
 ### 5.5 GET /db/tables
 
-- 响应：`{tables: [{name, rows}]}`——白名单六表（cache_entries / eval_history / request_metrics / turns / sessions / ingest_log），表缺失视为 rows=0
+- 参数：`source`（可选，chat / eval / ingest）——仅对含 source 列的表（request_metrics / turns）按来源等值过滤统计行数；无 source 列的表返回全量；非法值 → 422
+- 响应：`{tables: [{name, rows, has_source}]}`——白名单六表（cache_entries / eval_history / request_metrics / turns / sessions / ingest_log），表缺失视为 rows=0；`has_source` 供前端判断"行数不分来源"的弱化提示
 
 ### 5.6 GET /db/table/{name}
 
-- 参数：`limit`（缺省 50，clamp [1, 200]）
-- 响应：`{name, columns: [列名], rows: [值数组行]}`（按列顺序对齐；字符串字段超 500 字符截断）
+- 参数：`limit`（缺省 50，clamp [1, 200]）、`offset`（分页，≥0）、`q`（TEXT 列 LIKE 包含过滤）、`source`（chat / eval / ingest，仅对含 source 列的表生效）
+- 响应：`{name, columns: [列名], rows: [值数组行], total}`（rows 按 rowid 降序；字段超 500 字符截断；total = 过滤后总行数，与分页联动）
 - 非白名单表名 → 404
 
 ### 5.7 GET /config
@@ -173,6 +176,11 @@ Sidebar 六个视图（JS 切换，无路由）。头部全局状态徽章独立
 
 - 响应：`{status: ok|degraded, components: {chromadb, sqlite, llm: ok|error}, concurrency: {active, max}}`
 - 头部徽章 15s 轮询；Maintenance>Health 手动刷新
+
+### 5.10 POST /cache/clear
+
+- 响应：`{cleared: true, count}`（count = 被清空的 cache_entries 条数）
+- 走应用层 `CacheManager.invalidate_all()`，只清 cache_entries，不动 eval_history / turns / sessions（铁律 10）
 
 ## 6. 降级策略（前端对字段缺失的兜底）
 

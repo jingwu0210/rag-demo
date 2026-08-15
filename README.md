@@ -49,13 +49,13 @@ export PIP_INDEX_URL=https://pypi.org/simple
 | # | 交付物 | 链接 |
 |---|--------|------|
 | 2.1 | 一键评估脚本 | [eval.sh](./eval.sh) |
-| 2.2 | 评估报告（before/after 对比） | [evaluation-report.html](deliverables/eval-reports/evaluation-report.html) |
+| 2.2 | 评估报告（before/after 对比） | [evaluation-report.html](https://jingwu0210.github.io/rag-demo/deliverables/eval-reports/evaluation-report.html) |
 | 2.3 | 日志字段字典 + 样本日志 | [deliverables/logs/](deliverables/logs/) |
-| 2.4 | Issue Diagnosis（4 案例） | [issue-diagnosis.html](deliverables/diagnosis/issue-diagnosis.html) |
-| 2.5 | 运营报表 | [operations-report.html](deliverables/op-reports/operations-report.html) |
-| 2.6 | 演示页面 | 在线 [http://localhost:8000/rag-gen-ai-service-demo](http://localhost:8000/rag-gen-ai-service-demo)（需启动服务） · 静态 [demo.html](deliverables/demo/demo.html) |
+| 2.4 | Issue Diagnosis（4 案例） | [issue-diagnosis.html](https://jingwu0210.github.io/rag-demo/deliverables/diagnosis/issue-diagnosis.html) |
+| 2.5 | 运营报表 | [operations-report.html](https://jingwu0210.github.io/rag-demo/deliverables/op-reports/operations-report.html) |
+| 2.6 | 演示页面 | 在线 [http://localhost:8000/rag-gen-ai-service-demo](http://localhost:8000/rag-gen-ai-service-demo)（需启动服务） · 静态 [demo.html](https://jingwu0210.github.io/rag-demo/deliverables/demo/demo.html) |
 
-> HTML 版为最终交付形态（同设计系统，明暗双主题）；同名 `.md` 为源稿。演示页的在线链接需先 `./run.sh` 启动服务。
+> HTML 版为最终交付形态（同设计系统，明暗双主题）；同名 `.md` 为源稿。演示页的在线链接需先 `./run.sh` 启动服务。HTML 报告链接指向 GitHub Pages（`https://jingwu0210.github.io/rag-demo/`），需在 Settings → Pages 启用「Deploy from a branch（main / root）」后生效。
 
 ---
 
@@ -69,7 +69,7 @@ export PIP_INDEX_URL=https://pypi.org/simple
 | hybrid | 0.9289 ✅ | 0.7748 ✅ | **0.9465** ✅ | 0.9909 ✅ | **0.8917** ✅ | **1157ms** | **2562ms** |
 | hybrid+rerank | 0.9393 ✅ | 0.7978 ✅ | 0.9070 ✅ | 0.9909 ✅ | 0.8875 ✅ | 3303ms | 5636ms |
 
-**选型建议**：`hybrid` 综合最优（Compliance 最高、延迟与 token 最低）；`vector-only` 检索精度最高（CP / Faith 双第一）且延迟可控；`hybrid+rerank` 在本语料（252 chunks）增益有限、P95 约 2.2×，建议语料扩容后再启用。完整对比见 [evaluation-report.html](deliverables/eval-reports/evaluation-report.html)。
+**选型建议**：`hybrid` 综合最优（Compliance 最高、延迟与 token 最低）；`vector-only` 检索精度最高（CP / Faith 双第一）且延迟可控；`hybrid+rerank` 在本语料（252 chunks）增益有限、P95 约 2.2×，建议语料扩容后再启用。完整对比见 [evaluation-report.html](https://jingwu0210.github.io/rag-demo/deliverables/eval-reports/evaluation-report.html)。
 
 ---
 
