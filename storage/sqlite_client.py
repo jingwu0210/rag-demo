@@ -66,9 +66,16 @@ async def init_db() -> None:
             refusal_reason TEXT, from_cache BOOLEAN DEFAULT FALSE,
             retrieval_mode TEXT, sources_json TEXT,
             timing_json TEXT, token_prompt INTEGER, token_completion INTEGER, token_total INTEGER,
+            source TEXT DEFAULT 'chat',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # 迁移：旧库（无 source 列）补列 — 存量行默认 'chat'（chat/eval 分组报表依赖），幂等
+    try:
+        await db.execute(
+            "ALTER TABLE turns ADD COLUMN source TEXT DEFAULT 'chat'")
+    except Exception:
+        pass  # 列已存在（新库 CREATE 已含）
     await db.execute("CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, turn_index)")
 
     await db.execute("""

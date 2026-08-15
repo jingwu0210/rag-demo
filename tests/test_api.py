@@ -771,6 +771,73 @@ def test_db_table_q_filter_with_offset(tmp_path):
     assert row["cache_key"] == "k1"              # 降序 [k2, k1] 的 offset=1
 
 
+async def _insert_turns_with_source():
+    """插入 3 行 turns：source 分别为 chat / eval / chat（依赖 sessions 外键）"""
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO sessions (session_id) VALUES ('s-chat')")
+        await db.execute(
+            "INSERT INTO sessions (session_id) VALUES ('s-eval')")
+        await db.execute(
+            "INSERT INTO turns (turn_id, session_id, turn_index, raw_query, answer, "
+            "source) VALUES ('t1', 's-chat', 0, '年假有几天？', '10 天', 'chat')")
+        await db.execute(
+            "INSERT INTO turns (turn_id, session_id, turn_index, raw_query, answer, "
+            "source) VALUES ('t2', 's-eval', 0, '评估问题A', '答案A', 'eval')")
+        await db.execute(
+            "INSERT INTO turns (turn_id, session_id, turn_index, raw_query, answer, "
+            "source) VALUES ('t3', 's-chat', 1, '病假有几天？', '5 天', 'chat')")
+        await db.commit()
+    finally:
+        await db.close()
+
+
+def test_db_table_source_filter(tmp_path):
+    """db_table source 参数：对含 source 列的表（turns）按 source 等值过滤；
+    source 不传 → 全部；source 过滤与分页联动（total 正确）"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_turns_with_source())
+
+    # 全部（无 source 参数）
+    r = TestClient(app).get("/db/table/turns")
+    assert r.status_code == 200
+    assert r.json()["total"] == 3
+
+    # 按 source 过滤
+    r = TestClient(app).get("/db/table/turns", params={"source": "chat"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    rows = [dict(zip(body["columns"], row)) for row in body["rows"]]
+    assert all(row["source"] == "chat" for row in rows)
+
+    r = TestClient(app).get("/db/table/turns", params={"source": "eval"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    rows = [dict(zip(body["columns"], row)) for row in body["rows"]]
+    assert rows[0]["source"] == "eval"
+
+    # source + q 组合过滤
+    r = TestClient(app).get(
+        "/db/table/turns", params={"source": "chat", "q": "年假"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+
+
+def test_db_table_source_ignored_for_no_source_table(tmp_path):
+    """无 source 列的表（cache_entries）忽略 source 参数 → 返回全部"""
+    asyncio.run(init_db())
+    asyncio.run(_insert_cache_rows())
+
+    r = TestClient(app).get(
+        "/db/table/cache_entries", params={"source": "chat"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 2          # source 参数被忽略，两行都在
+    assert len(r.json()["rows"]) == 2
+
+
 async def _create_old_metrics_table():
     """构造旧库 request_metrics（无 source 列）+ 1 行存量数据"""
     db = await get_db()
