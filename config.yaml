@@ -29,10 +29,10 @@ reranker:
   top_n: 7                          # R7 残余 #1：同文档多 chunk 争 5 个位子，答案条款
                                      # 挤不进 top5（6 条 CP<0.5 实证）→ 7 给同文档条款留位；
                                      # 代价 prompt 多 2 chunks（~40%）
-  input_truncate_chars: 0          # rerank 输入截断（0=全文不截断，A 方案）：R7 验证
-                                     # 答案句深在 chunk 后段（gift register 答案在 658 char /
-                                     # 总长 926），200/400/600 char 截断均切不到，仅全文能使
-                                     # 答案 chunk 排第 1（分数 0.81）；代价 30 候选全文 ~5s
+  input_truncate_chars: 300        # rerank 输入截断（2026-08-16 CP 实验 + 5并发压测驱动）：
+                                     # A 方案全文(0) rerank ~5s，5 并发争抢 MPS 致粗排超时→空检索
+                                     # （实测全文 43% 失败 vs 200char 2%）；300 char 折中：rerank
+                                     # ~1.5s、CP 0.79-0.81（≥0.7），5 并发可挤进 10s SLA
   candidates_multiplier: 1.5        # 粗排候选 = top_k(20) × 1.5 = 30。
                                      # 60 候选（×3）推理 ~1.8s 贴死 2s 超时 → 频繁降级
                                      # （评估日志实测）；30 候选 ~0.9s 留 1.1s 余量
@@ -84,10 +84,11 @@ retrieval:
                                    # 压过现行标准——过期过滤的设计场景已存在，
                                    # baseline 评估应实证该能力）
       grace_period_days: 90
-  timeout: 5                        # 冷启动覆盖：BGE-M3 首次 encode 的 MPS 初始化 ~782ms，
-                                     # 闲置 ~1h 后 MPS 被系统换出、重新初始化 GPU 上下文可达
-                                     # 3-5s。3s 会误判超时 → 空 sources → low_confidence 误拒
-                                     # （实测聊天链路 12/28 请求超时 = 43%）。
+  timeout: 7                        # 冷启动 + 5 并发争抢覆盖：BGE-M3 首次 encode ~782ms，闲置
+                                     # ~1h 后 MPS 被换出重初始化 3-5s；且 5 并发时排后面的粗排
+                                     # retrieval 要等前面的 rerank 跑完才轮到 MPS（300char rerank
+                                     # ~1.5s × 5 ≈ 7.5s），5s 会误判超时→空 sources→误拒。
+                                     # 7s 给排队检索留余量（压测实测 5s 下 4/5 达标、1 超时）。
   max_workers: 2
 
 # ── 缓存 ──────────────────────────────────────────────────
@@ -169,6 +170,15 @@ refusal:
       - 黑客
       - 攻击
       - exploit
+      # 2026-08-16 OOS 漏拒修复：安全类（入侵/挖矿/防火墙）+ PII 敏感查询
+      # （年薪/工资/Wi-Fi密码）。不含"密码"——会误伤"密码更换频率/密码长度"
+      # 等 in-scope 政策题（实测 2 条）。
+      - 入侵
+      - 挖矿
+      - 防火墙
+      - 年薪
+      - 工资
+      - Wi-Fi 密码
   responses:
     low_confidence: "抱歉，我无法在内部知识库中找到与您问题足够相关的信息。建议您：1) 尝试换一种表述方式 2) 联系相关部门获取帮助。"
     out_of_scope: "您的问题超出了内部知识库的覆盖范围。我只能回答与公司内部文档相关的问题。"
@@ -244,11 +254,9 @@ eval:
     - vector-only
     - hybrid
     - hybrid+rerank
-  concurrency: 5                   # 评估并发度（问答并发 + judge 并发，v1.7）
-  rerank_concurrency: 2            # hybrid+rerank 专用并发：rerank(CrossEncoder) 与
-                                   # embedding(BGE-M3) 共享同一 MPS，5 并发时争抢 GPU 致
-                                   # 粗排超时→空 sources→low_confidence 误拒（实测 45/110
-                                   # 拒答、38 条粗排超时且 29 条聚集在配置收尾段）；降到 2 隔离争抢
+  concurrency: 5                   # 评估并发度（问答并发 + judge 并发，v1.7）；5 并发
+                                   # 同时验证 assignment"≥5 并发"硬指标。MPS 争抢根因已由
+                                   # 300char 截断 + retrieval.timeout 7s 修复，无需再降并发
   result_dir: workspace/results
 
 # ── 存储路径（v1.15 分层：assets = 版本化资产进 git；workspace = 机器状态忽略）──

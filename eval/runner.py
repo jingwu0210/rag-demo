@@ -333,7 +333,11 @@ async def _evaluate_qa_async(chat_service, item: dict) -> dict:
     # ── 拒答四场景（纯规则，含漏拒检测）──
     # 正确拒答（OOS 且拒）→ 1；正确作答（非 OOS 未拒且非漏拒）→ 1；
     # 误拒（非 OOS 拒）→ 0；漏拒（非 OOS 未拒但无 sources 且非缓存）→ 0；OOS 漏拒 → 0
-    if is_out_of_scope:
+    # 超时样本 → None：超时是"没来得及答"，不是拒答决策问题，只进 unanswered_rate
+    # 的 timeout 分解，不参与 Refusal Appropriateness 均值（否则被"漏拒"分支误计 0 分）。
+    if is_timeout:
+        refusal_appropriateness = None
+    elif is_out_of_scope:
         refusal_appropriateness = 1 if refused else 0
     elif refused:
         refusal_appropriateness = 0          # 误拒
@@ -382,12 +386,8 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
     modes = ConfigRegistry.get(
         "eval.compare_configs", ["vector-only", "hybrid", "hybrid+rerank"])
     concurrency = int(ConfigRegistry.get("eval.concurrency", 5))
-    # hybrid+rerank 专用并发：rerank 与 embedding 共享 MPS，5 并发争抢致粗排超时→
-    # 空 sources→low_confidence 误拒（实测 45/110 拒答）；降到 2 隔离争抢
-    rerank_concurrency = int(ConfigRegistry.get("eval.rerank_concurrency", 2))
     logger.info("eval_run_start", run_id=run_id, test_set_hash=test_set_hash,
-                modes=modes, qa_count=len(test_set), concurrency=concurrency,
-                rerank_concurrency=rerank_concurrency)
+                modes=modes, qa_count=len(test_set), concurrency=concurrency)
 
     results = []
     for mode in modes:
@@ -401,9 +401,7 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
 
         # ── 并发执行全部 QA（Semaphore 限流）──
         _ensure_ragas_llm()  # 预配置 judge（一次性）
-        mode_concurrency = (rerank_concurrency
-                            if mode == "hybrid+rerank" else concurrency)
-        sem = asyncio.Semaphore(mode_concurrency)
+        sem = asyncio.Semaphore(concurrency)
 
         # eval.sh 进度条埋点：每完成 10 条（或最后一条）打 eval_progress 事件
         progress = {"done": 0}
@@ -431,6 +429,7 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
         faithfulness_scores: List[float] = []
         precision_scores: List[float] = []
         refusal_hits = 0
+        refusal_valid = 0   # 参与 Refusal Appropriateness 均值的有效样本数（排除超时 None）
         timeout_count = 0
         total_pii = 0
         total_injections = 0
@@ -447,7 +446,9 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
                 faithfulness_scores.append(qa["faithfulness"])
             if qa["context_precision"] is not None:
                 precision_scores.append(qa["context_precision"])
-            refusal_hits += qa["refusal_appropriateness"]
+            if qa["refusal_appropriateness"] is not None:
+                refusal_hits += qa["refusal_appropriateness"]
+                refusal_valid += 1
             if qa["timeout"]:
                 timeout_count += 1
             # R13 F2: OOS 样本不进 compliance judge — 与 refused/timeout 同等待遇。
@@ -508,7 +509,8 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             # v1.10: 系统未作答（refused/timeout/空答案）占总样本比
             "unanswered_rate": round(unanswered_count / max(len(per_qa), 1), 4),
             "style_consistency": style,
-            "refusal_appropriateness": round(refusal_hits / n, 4),
+            "refusal_appropriateness": (round(refusal_hits / refusal_valid, 4)
+                                        if refusal_valid else None),
             "p50_latency_ms": int(np.percentile(latencies, 50)) if latencies else 0,
             "p95_latency_ms": int(np.percentile(latencies, 95)) if latencies else 0,
             "avg_tokens_per_call": int(np.mean(tokens)) if tokens else 0,
@@ -522,9 +524,11 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             # P4 分层视图：OOS/正常业务拆分 + 未作答三类分解
             # （OOS 样本不进 CP/Faith 计算，但混在 refusal/unanswered 里需拆分观测）
             "oos_refusal_rate": _round_mean(
-                [q["refusal_appropriateness"] for q in per_qa if q["is_out_of_scope"]]),
+                [q["refusal_appropriateness"] for q in per_qa
+                 if q["is_out_of_scope"] and q["refusal_appropriateness"] is not None]),
             "normal_refusal_rate": _round_mean(
-                [q["refusal_appropriateness"] for q in per_qa if not q["is_out_of_scope"]]),
+                [q["refusal_appropriateness"] for q in per_qa
+                 if not q["is_out_of_scope"] and q["refusal_appropriateness"] is not None]),
             "unanswered_refused": unanswered_count_refused,
             "unanswered_timeout": unanswered_count_timeout,
             "unanswered_empty": unanswered_count_empty,
