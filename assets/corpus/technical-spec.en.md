@@ -448,7 +448,7 @@
 
 ## 20. Architecture and Documentation Standards
 
-20.1 Design documents are stored as Markdown under the docs/ directory.
+20.1 Design documents are stored as Markdown under the designs/ directory.
 
 20.2 Section headers are preserved so that retrieval can anchor answers to the exact section.
 

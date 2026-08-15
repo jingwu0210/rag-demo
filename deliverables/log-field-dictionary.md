@@ -1,7 +1,7 @@
 # 日志字段字典（Log Field Dictionary）
 
 > RAG QA Service 交付物 — 结构化日志字段定义与样本  
-> 关联设计文档: docs/rag-service-design.md §6.2
+> 关联设计文档: designs/rag-service-design.md §6.2
 
 ## 1. 日志体系
 
