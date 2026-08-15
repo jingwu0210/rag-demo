@@ -67,7 +67,10 @@ class ChatService:
         # 1. 缓存（cache.l1.enabled 时）：命中直接返回，不建会话不检索；
         #    命中路径同样写 request_metrics（cache_hit=1），缓存命中率才可计算（I-2 终审）
         rid = get_request_id()
-        if cache_enabled:
+        # eval 不读缓存：评估必须测真实"检索→生成"管线，读缓存会把上一轮 eval 或
+        # 并发 chat 的旧答案当成评估结果（实测最新一轮 hybrid+rerank 10/110
+        # from_cache=True 污染，cache_key=query|mode 无轮次/来源维度）。
+        if cache_enabled and source != "eval":
             cache_start = time.perf_counter()
             cached = await self.cache.get(query, mode)
             # L2 埋点: cache_check
@@ -102,20 +105,29 @@ class ChatService:
         docs = retrieval_output.docs if retrieval_output else []
         degraded = retrieval_output.degraded if retrieval_output else False
         injection_blocked = retrieval_output.injection_blocked if retrieval_output else 0
+        retrieval_timeout = bool(getattr(retrieval_output, "retrieval_timeout", False))
 
         # 6. 拒答预检：由 PostProcessor 内部执行（第 8 步），此处跳过
 
         # 7. 生成（阶段超时 → 降级话术 + partial）
         partial = False
         gen_result = None
-        ctx = PromptContext(question=query, documents=docs, history=history, summary=summary)
-        try:
-            gen_result = await self.guard.with_stage_timeout(
-                "generation", self.generator.generate(ctx))
-        except StageTimeoutError:
+        if retrieval_timeout:
+            # 检索超时：不生成、不拒答，直接返回"系统繁忙"降级话术。
+            # 语义区别于"查无信息"（low_confidence）：后者是"搜了确实没有"，
+            # 前者是"没来得及搜"，不应误判成拒答。
             timeout = True
             partial = True
-            logger.warning("chat_generation_timeout", query=query)
+            logger.warning("chat_retrieval_timeout", query=query)
+        else:
+            ctx = PromptContext(question=query, documents=docs, history=history, summary=summary)
+            try:
+                gen_result = await self.guard.with_stage_timeout(
+                    "generation", self.generator.generate(ctx))
+            except StageTimeoutError:
+                timeout = True
+                partial = True
+                logger.warning("chat_generation_timeout", query=query)
 
         # 8. 后处理（生成超时的系统降级话术不经过拒答/脱敏）
         if gen_result is not None:
@@ -189,7 +201,9 @@ class ChatService:
         }
 
         # 9. 持久化：写缓存（未命中且非降级话术）→ turns → request_metrics
-        if cache_enabled and not partial:
+        # 拒答不进缓存：误拒（如超时误判"查无信息"）会污染 cache_entries 达 TTL 1 小时，
+        # 之后同样问题直接命中错误拒答——切断这条污染链。
+        if cache_enabled and not partial and not refused and source != "eval":
             await self.cache.put(query, mode, answer, sources, tokens.get("total", 0),
                                  refused=refused, refusal_reason=refusal_reason)
         request_id = uuid.uuid4().hex

@@ -214,7 +214,12 @@ def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[tuple]:
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={"model": model,
                       "messages": [{"role": "user", "content": prompt}],
-                      "temperature": temperature, "max_tokens": 100})
+                      "temperature": temperature, "max_tokens": 100,
+                      # deepseek-v4-flash 默认开启思考模式：思考链（reasoning_content）
+                      # 会吃满 max_tokens=100，导致 content 恒空 → judge_unparsable。
+                      # judge 是"分数|理由"裁决，无需思考链，显式关闭以对齐旧
+                      # deepseek-chat（= v4-flash 非思考模式）的行为。
+                      "thinking": {"type": "disabled"}})
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"].strip()
             # 提取第一个整数（兼容 judge 偶发多输出/前缀词如"分数：5分"）
@@ -377,8 +382,12 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
     modes = ConfigRegistry.get(
         "eval.compare_configs", ["vector-only", "hybrid", "hybrid+rerank"])
     concurrency = int(ConfigRegistry.get("eval.concurrency", 5))
+    # hybrid+rerank 专用并发：rerank 与 embedding 共享 MPS，5 并发争抢致粗排超时→
+    # 空 sources→low_confidence 误拒（实测 45/110 拒答）；降到 2 隔离争抢
+    rerank_concurrency = int(ConfigRegistry.get("eval.rerank_concurrency", 2))
     logger.info("eval_run_start", run_id=run_id, test_set_hash=test_set_hash,
-                modes=modes, qa_count=len(test_set), concurrency=concurrency)
+                modes=modes, qa_count=len(test_set), concurrency=concurrency,
+                rerank_concurrency=rerank_concurrency)
 
     results = []
     for mode in modes:
@@ -392,7 +401,9 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
 
         # ── 并发执行全部 QA（Semaphore 限流）──
         _ensure_ragas_llm()  # 预配置 judge（一次性）
-        sem = asyncio.Semaphore(concurrency)
+        mode_concurrency = (rerank_concurrency
+                            if mode == "hybrid+rerank" else concurrency)
+        sem = asyncio.Semaphore(mode_concurrency)
 
         # eval.sh 进度条埋点：每完成 10 条（或最后一条）打 eval_progress 事件
         progress = {"done": 0}

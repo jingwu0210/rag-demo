@@ -58,6 +58,11 @@ class _OpenAICompatAdapter(BaseLLMAdapter):
                     "messages": messages,
                     "temperature": self.temperature,
                     "max_tokens": self.max_tokens,
+                    # deepseek-v4-flash 默认开启思考模式（v1.17 迁移遗漏）：思考链
+                    # 会挤占 max_tokens 预算，导致答案截断（RAG 抽取题末尾 markdown
+                    # 星号未闭合、completion 均长偏短）。RAG 生成无需思考链，显式
+                    # 关闭以对齐旧 deepseek-chat 的非思考行为（Qwen/GLM 忽略该参数）。
+                    "thinking": {"type": "disabled"},
                 },
             )
             # 非 2xx：带前 200 字符错误信息抛 RuntimeError
