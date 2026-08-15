@@ -201,6 +201,7 @@ class ChatService:
             token_prompt=tokens.get("prompt", 0),
             token_completion=tokens.get("completion", 0),
             token_total=tokens.get("total", 0),
+            source=source,
         )
         await self._save_metrics(
             request_id=request_id, session_id=session_id, timing_ms=timing,
@@ -296,7 +297,8 @@ class ChatService:
                          refusal_reason: Optional[str], from_cache: bool,
                          retrieval_mode: str, sources: List[dict],
                          timing_ms: Dict[str, int], token_prompt: int,
-                         token_completion: int, token_total: int) -> None:
+                         token_completion: int, token_total: int,
+                         source: str = "chat") -> None:
         turn_id = uuid.uuid4().hex
         db = await get_db()
         try:
@@ -308,14 +310,15 @@ class ChatService:
                 "INSERT INTO turns (turn_id, session_id, turn_index, raw_query, "
                 "resolved_query, query_language, answer, refused, refusal_reason, "
                 "from_cache, retrieval_mode, sources_json, timing_json, "
-                "token_prompt, token_completion, token_total) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "token_prompt, token_completion, token_total, source) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (turn_id, session_id, turn_index, raw_query, resolved_query,
                  query_language, answer, int(refused), refusal_reason,
                  int(from_cache), retrieval_mode,
                  json.dumps(sources, ensure_ascii=False),
                  json.dumps(timing_ms, ensure_ascii=False),
-                 int(token_prompt), int(token_completion), int(token_total)))
+                 int(token_prompt), int(token_completion), int(token_total),
+                 source))
             await db.execute(
                 "UPDATE sessions SET turn_count = turn_count + 1 "
                 "WHERE session_id = ?", (session_id,))

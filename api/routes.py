@@ -545,11 +545,13 @@ def _build_where_like(info, q: Optional[str]):
 
 @router.get("/db/table/{table_name}")
 async def db_table(table_name: str, limit: int = 50, offset: int = 0,
-                   q: Optional[str] = None):
+                   q: Optional[str] = None, source: Optional[str] = None):
     """表数据预览：{name, columns, rows, total}（rows=值数组行，limit≤200，字段截断 500 字符）。
 
     rows 按 rowid 降序（最新在前）；offset 分页（offset≥0）；q 对 TEXT 列 LIKE 包含过滤，
-    total=过滤后总行数（与分页联动）。表名不在白名单 → 404。"""
+    total=过滤后总行数（与分页联动）。表名不在白名单 → 404。
+    source（可选）：'chat'/'eval'，仅对含 source 列的表生效（如 request_metrics / turns），
+    按 source 列等值过滤；无 source 列的表忽略该参数返回全部（"全部"视角）。"""
     if table_name not in _DB_TABLES:
         raise HTTPException(status_code=404, detail=f"未知表：{table_name}")
     n = min(max(limit, 1), _MAX_DB_ROWS)
@@ -560,6 +562,14 @@ async def db_table(table_name: str, limit: int = 50, offset: int = 0,
         info = await cur.fetchall()
         columns = [r["name"] for r in info]
         where_sql, params = _build_where_like(info, q)
+        # source 过滤：仅含 source 列的表生效（参数化等值匹配，无注入风险）；
+        # 无 source 列的表（cache_entries/sessions/ingest_log 等）忽略 → 返回全部
+        if source is not None and any(r["name"] == "source" for r in info):
+            if where_sql:
+                where_sql += " AND source = ?"
+            else:
+                where_sql = " WHERE source = ?"
+            params.append(source)
         cur = await db.execute(
             f"SELECT COUNT(*) AS n FROM {table_name}{where_sql}", params)
         row = await cur.fetchone()

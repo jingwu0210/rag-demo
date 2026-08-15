@@ -43,7 +43,7 @@ async def _fetch_turns(session_id: str):
     try:
         cur = await db.execute(
             "SELECT turn_index, raw_query, answer, query_language, timing_json, "
-            "sources_json, token_total, retrieval_mode, refused, from_cache "
+            "sources_json, token_total, retrieval_mode, refused, from_cache, source "
             "FROM turns WHERE session_id = ? ORDER BY turn_index", (session_id,))
         return [dict(r) for r in await cur.fetchall()]
     finally:
@@ -383,6 +383,7 @@ def test_chat_service_full_flow(tmp_path):
     assert t["token_total"] == 30
     assert t["retrieval_mode"] == "hybrid+rerank"
     assert t["refused"] == 0
+    assert t["source"] == "chat"                  # 默认调用方 = chat 对话
 
     metrics = asyncio.run(_fetch_metrics())
     assert len(metrics) == 1
@@ -438,7 +439,8 @@ def test_chat_service_cache_hit_writes_metrics(tmp_path):
 
 
 def test_chat_service_source_eval(tmp_path):
-    """source="eval"（评估跑批）→ request_metrics.source='eval'，与 chat 对话区分"""
+    """source="eval"（评估跑批）→ request_metrics.source='eval'，与 chat 对话区分；
+    turns.source 同步标记 'eval'（Database 次级菜单按 source 过滤依赖）"""
     svc, deps = _chat_svc(tmp_path)
 
     resp = asyncio.run(svc.process("年假有几天？", None, source="eval"))
@@ -447,6 +449,9 @@ def test_chat_service_source_eval(tmp_path):
     metrics = asyncio.run(_fetch_metrics())
     assert len(metrics) == 1
     assert metrics[0]["source"] == "eval"
+    turns = asyncio.run(_fetch_turns(resp.session_id))
+    assert len(turns) == 1
+    assert turns[0]["source"] == "eval"
 
 
 def test_chat_service_generation_timeout_partial(tmp_path):
