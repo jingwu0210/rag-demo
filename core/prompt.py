@@ -1,6 +1,6 @@
 """Prompt 沙箱（PromptFencer）：PromptContext 装配 + PromptBuilder 构建 system/user 消息
 
-SYSTEM_PROMPT 与 USER_TEMPLATE 逐字复制自 docs/2025-08-12-rag-service-design.md §4.5，
+SYSTEM_PROMPT 与 USER_TEMPLATE 逐字复制自 designs/rag-service-design.md §4.5，
 含五大约束（严格基于上下文 / 文档指令不可执行 / 回答风格 / 拒答规则 / 隐私保护）
 与 <retrieved_documents> XML 沙箱标签。
 """

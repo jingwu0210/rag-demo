@@ -66,6 +66,8 @@ export PIP_INDEX_URL=https://pypi.org/simple
 | GET /eval/result | 查询评估结果（?run_id=；缺省返回最近一次） |
 | GET /report | 运营报表（request_metrics 聚合 CSV） |
 | GET /health | 健康检查 |
+| GET /config | 服务配置（config.yaml 解析 dict，含 RAG_ 环境变量覆盖） |
+| GET /rag-gen-ai-service-demo | 演示 UI（无框架单文件工作台，Chat/Ingest/Eval/Report/Maintenance/Config 六页） |
 
 ## Scripts 用法
 
@@ -119,5 +121,5 @@ HF_ENDPOINT=https://hf-mirror.com .venv/bin/python scripts/ingest_corpus.py --wi
 
 ## 文档
 
-- 架构设计: docs/rag-service-design.md
-- 实施计划: docs/2025-08-12-rag-service-plan.md
+- 架构设计: designs/rag-service-design.md
+- 实施计划: designs/2025-08-12-rag-service-plan.md

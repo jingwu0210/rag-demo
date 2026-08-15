@@ -2153,7 +2153,7 @@ PATTERNS = [
 
 #### 核心埋点事件（v1.3 实现状态）
 
-日志格式（v1.3）：头部四字段平铺（timestamp/level/event/module）+ 业务数据分组嵌套。完整字段定义与样本见交付物 docs/log-field-dictionary.md。
+日志格式（v1.3）：头部四字段平铺（timestamp/level/event/module）+ 业务数据分组嵌套。完整字段定义与样本见交付物 deliverables/log-field-dictionary.md。
 
 | 事件 | 触发时机 | 关键字段 | 实现状态 |
 |------|------|------|:---:|
@@ -2405,7 +2405,7 @@ bad_cases = db.query("""
 
 #### Issue Diagnosis 模板
 
-> 示例数据取自真实案例（R2→R3 评估，详见 docs/eval-history.md）；交付评估报告时
+> 示例数据取自真实案例（R2→R3 评估，详见 deliverables/eval-history.md）；交付评估报告时
 > 必须以 eval_history 真实 run 数据填写，禁止沿用本模板数字。
 
 ```
@@ -2427,7 +2427,7 @@ bad_cases = db.query("""
   [2026-08-13] stage_timeout stage=rerank timeout=2s（评估日志大量）
 根因分析: 60 候选 × 全文推理实测 2248ms 超 2s 阶段预算
 修复方案: 输入截断 200 字符（~782ms）+ candidates_multiplier 1.5（30 候选）
-修复效果: rerank P95 4171ms → 2729ms（降 35%，与 docs/eval-history.md 一致）
+修复效果: rerank P95 4171ms → 2729ms（降 35%，与 deliverables/eval-history.md 一致）
 ```
 
 #### 评估历史持久化 & 自动对比
@@ -2503,7 +2503,7 @@ def compare_runs(run_id_before: str, run_id_after: str) -> ComparisonReport:
         improvements=improvements
     )
 
-# 示例输出（数值为演示占位，真实对比数据见 docs/eval-history.md）:
+# 示例输出（数值为演示占位，真实对比数据见 deliverables/eval-history.md）:
 # metric                    before  after   delta
 # faithfulness              <run A> <run B> <delta>
 # context_precision         <run A> <run B> <delta>  ← 超过 10% 阈值 ✅
@@ -2528,7 +2528,7 @@ python -m eval.report --compare <run_id_before> <run_id_after>
 |----|--------|--------------|------|
 | **eval_history（DB）** | 权威数据源 — `compare_runs` 的唯一输入，per_qa 明细所在 | 每 (run_id, config_name) 一行，永不覆盖 | 铁律 10：禁止 rm 数据库文件；清缓存走 CacheManager.invalidate_all() |
 | **报表文件** | 人类可读快照（非权威） | `eval_report-<ts>.csv/md` 带时间戳归档，历史互相不覆盖；`eval_report.csv/md` 仅作最新副本（覆盖允许） | git-ignored（workspace/results/），权威数据在 DB |
-| **评估档案** | 交付物归档（before/after 数据链） | `docs/eval-history.md`，每轮评估后追加：测试集版本、修复状态、完整指标表、对比结论、数据完整性声明 | 入库（git），交付物之一 |
+| **评估档案** | 交付物归档（before/after 数据链） | `deliverables/eval-history.md`，每轮评估后追加：测试集版本、修复状态、完整指标表、对比结论、数据完整性声明 | 入库（git），交付物之一 |
 
 **设计教训（v1.5 补记）**：报表文件的固定名覆盖问题在 v1.0-v1.4 设计文档中从未定义 — 报表是实施引入的设计外产物，其生命周期无设计背书，导致三轮评估互相覆盖。v1.5 起所有"实施引入的新输出物"必须在本节登记生命周期。
 
@@ -2889,7 +2889,7 @@ echo "评估完成: workspace/results/report.csv"
 
 ### 10.2 结构化日志样例
 
-> 真实样例（R4 评估日志 workspace/logs/eval-20260813_201235.log，字段定义以 docs/log-field-dictionary.md 为唯一权威）。格式：头部四字段平铺（timestamp → level → event → module）+ 业务数据分组嵌套。
+> 真实样例（R4 评估日志 workspace/logs/eval-20260813_201235.log，字段定义以 deliverables/log-field-dictionary.md 为唯一权威）。格式：头部四字段平铺（timestamp → level → event → module）+ 业务数据分组嵌套。
 
 ```json
 {"timestamp": "2026-08-13T12:12:47.404Z", "level": "info", "event": "retrieval_complete", "module": "retrieval",
@@ -2910,11 +2910,11 @@ echo "评估完成: workspace/results/report.csv"
 
 ### 10.3 字段字典
 
-字段定义与全部事件字典见交付物 **docs/log-field-dictionary.md**（唯一权威，§6.2 只保留事件清单）。本节不重复承载字段表，避免两处漂移。
+字段定义与全部事件字典见交付物 **deliverables/log-field-dictionary.md**（唯一权威，§6.2 只保留事件清单）。本节不重复承载字段表，避免两处漂移。
 
 ### 10.4 评估输出 CSV 样例
 
-列定义与实现以 `eval/report.py` 为准（v1.13 起 17 列：+oos_refusal_rate/normal_refusal_rate，P4 分层）。样例为 R4 实测数据（run `eval_20260813_201247_bc895179`，R4 时分层列为空，完整对比见 docs/eval-history.md）：
+列定义与实现以 `eval/report.py` 为准（v1.13 起 17 列：+oos_refusal_rate/normal_refusal_rate，P4 分层）。样例为 R4 实测数据（run `eval_20260813_201247_bc895179`，R4 时分层列为空，完整对比见 deliverables/eval-history.md）：
 
 ```csv
 config,faithfulness,context_precision,answer_compliance,refusal_appropriateness,style_consistency,p50_ms,p95_ms,avg_tokens,avg_prompt_tokens,avg_completion_tokens,avg_chunks,timeout_rate,unanswered_rate,oos_refusal_rate,normal_refusal_rate,total_requests
