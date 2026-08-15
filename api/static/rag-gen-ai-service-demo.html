@@ -564,7 +564,8 @@
       <!-- Database -->
       <div class="tab-pane" id="tab-db">
         <div class="panel">
-          <div class="panel-head"><span class="k">数据库</span><span class="desc">SQLite 表清单 + 数据预览（最新在前）</span></div>
+          <div class="panel-head"><span class="k">数据库</span><span class="desc">SQLite 表清单 + 数据预览（最新在前）</span>
+            <span class="count"><button class="btn ghost" id="clearCacheBtn" style="padding:3px 12px;font-size:12px">🗑️ 清空缓存</button></span></div>
           <div class="panel-body">
             <div class="seg" id="dbSourceSeg" style="margin-bottom:10px" role="group" aria-label="数据来源过滤">
               <button class="seg-btn active" data-source="all">全部</button>
@@ -1755,6 +1756,23 @@ async function loadTables(){
     toast("表清单加载失败：" + err.message);
   }
 }
+
+/* 🗑️ 清空缓存（仅 cache_entries 表，不动 eval_history/turns/request_metrics） */
+async function clearCache(){
+  if(!confirm("确定清空 L1 缓存（cache_entries 表）？\n此操作不影响评估历史、对话记录等其他表。")) return;
+  const btn = $("clearCacheBtn");
+  btn.disabled = true;
+  try{
+    const d = await apiJSON("/cache/clear", { method: "POST" });
+    toast("已清空 " + (d && d.count != null ? d.count : 0) + " 条缓存", "ok");
+    loadTables();   // 刷新表清单：cache_entries 行数归零
+  }catch(err){
+    toast("清空缓存失败：" + err.message);
+  }
+  btn.disabled = false;
+}
+$("clearCacheBtn").addEventListener("click", clearCache);
+
 async function fetchDbTable(){
   const box = $("dbPreview");
   box.replaceChildren(loadingEl("加载 " + esc(dbState.table) + " 预览…"));

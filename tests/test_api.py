@@ -965,3 +965,19 @@ def test_db_source_invalid_422():
 
     r = TestClient(app).get("/db/table/turns", params={"source": "bogus"})
     assert r.status_code == 422
+
+
+def test_clear_cache():
+    """POST /cache/clear 调 CacheManager.invalidate_all()，返回清空条目数"""
+    asyncio.run(init_db())
+    app.state.chat_service = MagicMock()
+    app.state.chat_service.cache = MagicMock()
+    app.state.chat_service.cache.invalidate_all = AsyncMock()
+
+    r = TestClient(app).post("/cache/clear")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cleared"] is True
+    assert body["count"] == 0                          # 临时库无缓存条目
+    app.state.chat_service.cache.invalidate_all.assert_awaited_once()

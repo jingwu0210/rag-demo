@@ -574,3 +574,25 @@ async def db_table(table_name: str, limit: int = 50, offset: int = 0,
     finally:
         await db.close()
     return {"name": table_name, "columns": columns, "rows": rows, "total": total}
+
+
+# ── 10. 清空缓存（演示 UI Maintenance > Database）──────────
+
+@router.post("/cache/clear")
+async def clear_cache(request: Request):
+    """清空 L1 缓存（cache_entries 表），返回被清空的条目数。
+
+    铁律 10：cache.db 是混合库（cache_entries 可清 + eval_history/turns 不可清），
+    清缓存必须走应用层 CacheManager.invalidate_all()，只删 cache_entries，禁止删库文件。
+    """
+    cache = request.app.state.chat_service.cache
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT COUNT(*) AS n FROM cache_entries")
+        row = await cur.fetchone()
+        before = int(row["n"]) if row else 0
+    finally:
+        await db.close()
+    await cache.invalidate_all()
+    logger.info("cache_cleared", cleared=before)
+    return {"cleared": True, "count": before}
