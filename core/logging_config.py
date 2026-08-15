@@ -27,7 +27,7 @@ def setup_logging() -> None:
     ]
 
     if ConfigRegistry.get("logging.format", "json") == "json":
-        processors.append(structlog.processors.JSONRenderer())
+        processors.append(structlog.processors.JSONRenderer(ensure_ascii=False))
     else:
         processors.append(structlog.dev.ConsoleRenderer())
 
