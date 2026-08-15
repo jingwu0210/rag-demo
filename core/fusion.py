@@ -15,6 +15,7 @@ class RRFFusion:
         scores = {}
         docs = {}
         vec_sims = {}
+        bm25_ranks = {}
 
         for rank, doc in enumerate(vec_results):
             cid = doc["chunk_id"]
@@ -26,6 +27,10 @@ class RRFFusion:
             cid = doc["chunk_id"]
             scores[cid] = scores.get(cid, 0.0) + bm25_weight / (k + rank + 1)
             docs.setdefault(cid, doc)
+            # P2d: 记录 BM25 排名（1-based）供强命中豁免——仅分数>0 的真命中
+            # 记录（0 分伪命中如语料小于 top_k 时整库入选，不豁免）
+            if float(doc.get("score", 0)) > 0:
+                bm25_ranks[cid] = rank + 1
 
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         result = []
@@ -33,5 +38,6 @@ class RRFFusion:
             doc = dict(docs[cid])
             doc["rrf_score"] = rrf_score
             doc["vec_sim"] = vec_sims.get(cid)
+            doc["bm25_rank"] = bm25_ranks.get(cid)
             result.append(doc)
         return result

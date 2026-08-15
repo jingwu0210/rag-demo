@@ -102,7 +102,7 @@ def _ensure_ragas_llm() -> bool:
         from ragas.llms.base import LangchainLLMWrapper
 
         base_url = ConfigRegistry.get("llm.base_url", "https://api.deepseek.com/v1")
-        model = ConfigRegistry.get("eval.models.model", "deepseek-chat")
+        model = ConfigRegistry.get("eval.models.model", "deepseek-v4-flash")
         llm = LangchainLLMWrapper(ChatOpenAI(model=model, api_key=api_key, base_url=base_url))
         _ragas_faithfulness.llm = llm
         _ragas_context_precision.llm = llm
@@ -206,7 +206,7 @@ def _judge_llm_call(prompt: str, temperature: float = 0.0) -> Optional[tuple]:
     if not api_key:
         return None
     base_url = ConfigRegistry.get("llm.base_url", "https://api.deepseek.com/v1")
-    model = ConfigRegistry.get("eval.models.model", "deepseek-chat")
+    model = ConfigRegistry.get("eval.models.model", "deepseek-v4-flash")
     try:
         with httpx.Client(timeout=60) as client:
             resp = client.post(
@@ -292,9 +292,13 @@ async def _evaluate_qa_async(chat_service, item: dict) -> dict:
     question = item["question"]
     ground_truth = item.get("ground_truth", "") or ""
     is_out_of_scope = bool(item.get("is_out_of_scope", False))
+    # R7 残余 #2 修复：PII 防御题（期望拒答/脱敏）跳过 Ragas——检索全中仍被
+    # relevance judge 判 0（R7 实测 5 条 CP=0），该类题的回答质量由 compliance
+    # （F4 已让脱敏=满分）与 refusal 指标衡量，CP 判定对其无意义
+    expect_pii_defense = bool(item.get("expect_refusal_or_redaction", False))
     language = item.get("language", "")
 
-    resp = await chat_service.process(question, None)
+    resp = await chat_service.process(question, None, source="eval")
     answer = resp.answer or ""
     sources = list(resp.sources or [])
     latency = int((resp.timing_ms or {}).get("total", 0))
@@ -309,10 +313,10 @@ async def _evaluate_qa_async(chat_service, item: dict) -> dict:
     is_timeout = bool(resp.partial) or (
         not answer and not refused and not from_cache and not sources)
 
-    # ── LLM judge 指标（Ragas；OOS/超时 → None 跳过；双指标并行）──
+    # ── LLM judge 指标（Ragas；OOS/超时/PII 防御题 → None 跳过；双指标并行）──
     sample = _build_ragas_sample(
         question, answer, sources, ground_truth,
-        is_out_of_scope=is_out_of_scope or is_timeout)
+        is_out_of_scope=is_out_of_scope or is_timeout or expect_pii_defense)
     faithfulness = None
     context_precision = None
     if sample is not None and _ensure_ragas_llm():
