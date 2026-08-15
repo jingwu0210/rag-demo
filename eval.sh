@@ -75,6 +75,18 @@ ConfigRegistry.init('config.yaml')
 print(len(ConfigRegistry.get('eval.compare_configs', [])))
 " 2>/dev/null || echo "3")
 
+# ── ①.5 清缓存 ─────────────────────────────────────────
+# 评估前清空 cache_entries（铁律 10：走应用层 invalidate_all，只清缓存、
+# 不动 eval_history/turns，禁止 rm 库文件）。eval 虽已按 source 隔离缓存，
+# 仍显式清空作双保险，避免任何残留缓存干扰评估的 before/after 对比。
+.venv/bin/python -c "
+import asyncio
+from core.config import ConfigRegistry
+from core.cache import CacheManager
+ConfigRegistry.init('config.yaml')
+asyncio.run(CacheManager().invalidate_all())
+" 2>/dev/null && echo "🧹 缓存已清空（cache_entries）" || echo "⚠️ 清缓存失败，继续评估"
+
 # ── ② 评估（后台跑 + 进度条）────────────────────────────
 echo "🚀 开始评估"
 echo "   测试集: ${TEST_SET} 条 × ${CONFIGS} 个检索配置（vector-only / hybrid / hybrid+rerank）"
