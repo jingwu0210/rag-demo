@@ -203,6 +203,31 @@ def test_judge_llm_call_disables_thinking(monkeypatch):
     assert payload["max_tokens"] == 100
 
 
+def test_evaluate_qa_timeout_excluded_from_refusal():
+    """超时样本 refusal_appropriateness=None（不进拒答均值，不算漏拒/误拒）。
+
+    超时是"没来得及答"，不是拒答决策问题；否则会被"漏拒"分支（非OOS 无sources
+    仍作答）误计 0 分，双重计数。
+    """
+    from eval.runner import _evaluate_qa_async
+
+    class TimeoutChatService:
+        def __init__(self):
+            self.retrieval = MagicMock()
+            self.retrieval.reranker.ensure_loaded = MagicMock()
+
+        async def process(self, query, session_id=None, source="chat"):
+            return ChatResponse(answer="请求处理超时，请稍后重试。",
+                                session_id="s", sources=[], partial=True)
+
+    item = {"question": "年假有几天？", "ground_truth": "15天",
+            "is_out_of_scope": False}
+    result = asyncio.run(_evaluate_qa_async(TimeoutChatService(), item))
+
+    assert result["timeout"] is True
+    assert result["refusal_appropriateness"] is None   # 超时 → None，不误计漏拒
+
+
 # ═══ 3. 三配置对比 Runner ══════════════════════════════════
 
 def test_run_comparison_executes_three_configs(tmp_path):

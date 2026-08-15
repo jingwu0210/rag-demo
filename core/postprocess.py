@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from core.config import ConfigRegistry
+from core.scanner import detect_injection
 
 
 @dataclass
@@ -100,6 +101,13 @@ class RefusalCheck:
         """
         docs = getattr(retrieval_result, "docs", None) or []
         mode = mode or ConfigRegistry.get("retrieval.mode", "hybrid+rerank")
+
+        # 规则 0: query 命中注入模式（越狱/指令覆盖/数据外泄）→ safety。
+        # 与检索无关、最先判：注入是 query 本身的攻击面，不是语料内容，
+        # 且"Ignore all previous" 类 query 在语料里可能仍检索到高置信 chunk，
+        # 不能依赖规则 1/2 的空结果/置信度兜底。
+        if detect_injection(query):
+            return True, "safety"
 
         # 规则 1: 空结果 → low_confidence（所有模式）
         if not docs:

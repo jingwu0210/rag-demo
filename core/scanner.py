@@ -61,3 +61,16 @@ class InjectionScanner:
     @classmethod
     def _severity_gte(cls, severity: str, threshold: str) -> bool:
         return cls._SEVERITY_RANK.get(severity, -1) >= cls._SEVERITY_RANK.get(threshold, 0)
+
+
+def detect_injection(text: str) -> bool:
+    """检测 query 是否命中注入模式（越狱/指令覆盖/数据外泄）→ 供 RefusalCheck 拒答。
+
+    InjectionScanner.scan 只扫检索到的 chunk，不扫用户 query；但 prompt 注入的
+    攻击面在 query（"Ignore all previous instructions" 是用户发的指令，不是语料
+    内容）。此函数复用同一套 PATTERNS 扫 query。
+    """
+    for pattern, _severity in InjectionScanner.PATTERNS:
+        if re.search(pattern, text):
+            return True
+    return False
