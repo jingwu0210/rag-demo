@@ -136,6 +136,9 @@ def test_deepseek_adapter_chat_mocked():
     assert payload["messages"] == [{"role": "user", "content": "hi"}]
     assert payload["temperature"] == ConfigRegistry.get("llm.temperature")
     assert payload["max_tokens"] == ConfigRegistry.get("llm.max_tokens")
+    # deepseek-v4-flash 默认思考模式会挤占 max_tokens 导致答案截断，
+    # 必须显式关闭（对齐旧 deepseek-chat 非思考行为）——回归护栏。
+    assert payload["thinking"] == {"type": "disabled"}
 
 
 def test_adapter_chat_json_parse_failure_raises_runtime_error():

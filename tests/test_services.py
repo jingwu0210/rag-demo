@@ -419,6 +419,53 @@ def test_chat_service_cache_hit(tmp_path):
     deps["cache"].put.assert_not_awaited()
 
 
+def test_chat_service_eval_bypasses_cache(tmp_path):
+    """eval 隔离缓存：source="eval" 不读缓存、不写缓存，始终走真实检索→生成管线。
+
+    回归护栏：cache_key=query|mode 无轮次/来源维度，eval 若读缓存会把上一轮 eval
+    或并发 chat 的旧答案当成评估结果（实测最新一轮 hybrid+rerank 10/110
+    from_cache=True 污染）。
+    """
+    svc, deps = _chat_svc(tmp_path, cache_hit=True)   # cache.get 本会命中
+
+    resp = asyncio.run(svc.process("年假有几天？", source="eval"))
+
+    assert resp.from_cache is False
+    deps["cache"].get.assert_not_awaited()              # 不读缓存
+    deps["cache"].put.assert_not_awaited()              # 不写缓存
+    deps["retrieval"].retrieve.assert_awaited_once()    # 走真实检索
+    deps["generator"].generate.assert_awaited_once()    # 走真实生成
+
+
+def test_chat_service_retrieval_timeout_returns_timeout_not_refusal(tmp_path):
+    """检索超时 → 返回"系统繁忙"（partial），而非误判"查无信息"低置信拒答。"""
+    ro = RetrievalOutput(
+        docs=[], mode="hybrid+rerank",
+        timing_ms={"retrieval": 5001, "rerank": 0, "total": 5001},
+        degraded=False, injection_blocked=0, retrieval_timeout=True)
+    svc, deps = _chat_svc(tmp_path, retrieval_output=ro)
+
+    resp = asyncio.run(svc.process("年假有几天？"))
+
+    assert resp.partial is True
+    assert resp.refused is False
+    deps["generator"].generate.assert_not_awaited()      # 检索超时跳生成
+    deps["postprocessor"].process.assert_not_called()    # 不走拒答
+    deps["cache"].put.assert_not_awaited()               # 超时话术不进缓存
+
+
+def test_chat_service_refused_not_cached(tmp_path):
+    """拒答结果不进缓存（切断误拒污染 cache_entries 达 TTL 的链）。"""
+    pp = PostProcessResult(answer="抱歉，无法回答。", refused=True,
+                           refusal_reason="low_confidence")
+    svc, deps = _chat_svc(tmp_path, pp_result=pp)
+
+    resp = asyncio.run(svc.process("年假有几天？"))
+
+    assert resp.refused is True
+    deps["cache"].put.assert_not_awaited()               # 拒答不进缓存
+
+
 def test_chat_service_cache_hit_writes_metrics(tmp_path):
     """I-2 终审：缓存命中路径也写 request_metrics（cache_hit=1），命中率才可计算"""
     svc, deps = _chat_svc(tmp_path, cache_hit=True)

@@ -75,6 +75,16 @@ async def startup():
         except Exception:
             logger.warning("warmup_failed", component="reranker", exc_info=True)
 
+        # embedder 预热（v1.18）：SentenceTransformer(device="mps") 只加载权重，
+        # 首次 encode 才触发 MPS GPU 上下文初始化（内存分配/内核编译）。该开销若
+        # 落到第一条真实请求会撞 retrieval.timeout（实测首请求 782ms vs 正常 340ms；
+        # 闲置 ~1h 后 MPS 被系统换出更会 >3s）。预热失败只 warning，不置 startup_error。
+        try:
+            embedder.warmup()
+            logger.info("warmup_complete", component="embedder")
+        except Exception:
+            logger.warning("warmup_failed", component="embedder", exc_info=True)
+
         logger.info("api_startup_complete")
     except Exception as exc:
         # Embedder 等重组件加载失败：不崩，health 降级

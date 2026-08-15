@@ -40,6 +40,8 @@ class RetrievalOutput:
     mode: str                        # 实际执行的模式
     timing_ms: Dict[str, int] = field(default_factory=dict)   # {"retrieval","rerank","total"}
     degraded: bool = False           # 是否降级（rerank 超时/熔断）
+    retrieval_timeout: bool = False  # 粗排检索是否阶段超时（上层据此返回"超时"话术，
+                                     # 而非误判成"查无信息"低置信拒答）
     injection_blocked: int = 0
     # R3: 向量路 top1 余弦分数旁路透传（RefusalCheck 置信度判定用）
     vector_top1_sim: Optional[float] = None
@@ -91,15 +93,18 @@ class RetrievalService:
         else:
             coarse_top_k = 20
 
-        # Step 1: 粗排检索（阶段超时；超时 → 空结果继续，触发低置信拒答）
+        # Step 1: 粗排检索（阶段超时 → 标记 retrieval_timeout，供上层返回"超时"话术，
+        # 而非误判成"查无信息"低置信拒答）
         t0 = time.perf_counter()
         result = None
+        retrieval_timeout = False
         try:
             result = await self.guard.with_stage_timeout(
                 "retrieval",
                 self._call(self.retriever.retrieve, self._retrieval_pool,
                            query, coarse_top_k, doc_type, need_rerank, mode_cfg))
         except StageTimeoutError:
+            retrieval_timeout = True
             logger.warning("retrieval_stage_timeout", query=query)
         retrieval_ms = int((time.perf_counter() - t0) * 1000)
 
@@ -199,6 +204,7 @@ class RetrievalService:
                 "total": int((time.perf_counter() - total_start) * 1000),
             },
             degraded=degraded,
+            retrieval_timeout=retrieval_timeout,
             injection_blocked=blocked,
             vector_top1_sim=(result.vector_top1_sim if result else None),
         )

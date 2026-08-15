@@ -84,7 +84,10 @@ retrieval:
                                    # 压过现行标准——过期过滤的设计场景已存在，
                                    # baseline 评估应实证该能力）
       grace_period_days: 90
-  timeout: 3
+  timeout: 5                        # 冷启动覆盖：BGE-M3 首次 encode 的 MPS 初始化 ~782ms，
+                                     # 闲置 ~1h 后 MPS 被系统换出、重新初始化 GPU 上下文可达
+                                     # 3-5s。3s 会误判超时 → 空 sources → low_confidence 误拒
+                                     # （实测聊天链路 12/28 请求超时 = 43%）。
   max_workers: 2
 
 # ── 缓存 ──────────────────────────────────────────────────
@@ -242,6 +245,10 @@ eval:
     - hybrid
     - hybrid+rerank
   concurrency: 5                   # 评估并发度（问答并发 + judge 并发，v1.7）
+  rerank_concurrency: 2            # hybrid+rerank 专用并发：rerank(CrossEncoder) 与
+                                   # embedding(BGE-M3) 共享同一 MPS，5 并发时争抢 GPU 致
+                                   # 粗排超时→空 sources→low_confidence 误拒（实测 45/110
+                                   # 拒答、38 条粗排超时且 29 条聚集在配置收尾段）；降到 2 隔离争抢
   result_dir: workspace/results
 
 # ── 存储路径（v1.15 分层：assets = 版本化资产进 git；workspace = 机器状态忽略）──

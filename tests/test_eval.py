@@ -186,6 +186,23 @@ def test_judge_llm_call_unparsable_yields_none(monkeypatch):
         assert _judge_llm_call("prompt") is None
 
 
+def test_judge_llm_call_disables_thinking(monkeypatch):
+    """回归护栏：judge 请求必须显式关闭思考模式。
+
+    deepseek-v4-flash 默认开启思考（reasoning_content 吃满 max_tokens=100 →
+    content 恒空 → judge_unparsable → 该样本被剔出 compliance 均值，制造
+    "恒 5 / 假 1.0" 假象）。judge 是"分数|理由"裁决，无需思考链。
+    """
+    from eval.runner import _judge_llm_call
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    mock_client = _mock_judge_resp("5|完全依据文档")
+    with patch("httpx.Client", return_value=mock_client):
+        _judge_llm_call("prompt")
+    payload = mock_client.post.call_args.kwargs["json"]
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["max_tokens"] == 100
+
+
 # ═══ 3. 三配置对比 Runner ══════════════════════════════════
 
 def test_run_comparison_executes_three_configs(tmp_path):
