@@ -176,6 +176,8 @@ COMPLIANCE_JUDGE_PROMPT = """你是合规打分裁判。给定【参考文档片
 判定规则（必须遵守）：
 1. 判定 0 分前，必须逐条核对参考文档；只有答案的关键断言在文档中完全找不到支撑时才能判 0。
 2. 参考文档中含有无关内容时，不得因此扣分——只核对答案断言是否与文档中对应内容一致。
+3. 参考文档仅为检索片段，可能未包含语料全部条款。答案引用某条款编号而该条款不在参考文档中时，不得判为"编造"，应标注"无法核对"并按答案与文档的一致性给分。
+4. 涉及个人信息（姓名/电话/身份证/银行卡号）的问题，答案使用 [REDACTED] 占位符脱敏或明确拒答的，视为完全正确（5 分）；不得以"关键信息缺失"为由扣分。
 输出格式：分数|理由（理由一句话，≤30字）。
 
 参考文档：
@@ -424,7 +426,12 @@ def run_comparison(chat_service, test_set: List[dict], run_id: str = None) -> Li
             refusal_hits += qa["refusal_appropriateness"]
             if qa["timeout"]:
                 timeout_count += 1
-            if qa["answer"] and not qa["refused"] and not qa["timeout"]:
+            # R13 F2: OOS 样本不进 compliance judge — 与 refused/timeout 同等待遇。
+            # 归因实证（R6）：38 个 OOS 正确拒答样本因 RefusalCheck 未触发（大语料下
+            # 检索不再为空）refused=False，漏过过滤被判 0 分（-0.10）。OOS 的正确
+            # 行为由 refusal_appropriateness 指标衡量，与 compliance 无关。
+            if qa["answer"] and not qa["refused"] and not qa["timeout"] \
+                    and not qa["is_out_of_scope"]:
                 compliance_items.append(
                     (qa["question"], qa["answer"], qa["chunks_text"]))
 
