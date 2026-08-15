@@ -14,6 +14,13 @@ fi
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 
+# ── 代理兼容：镜像域名绕过系统代理直连 ──────────────────────
+# 部分机器配置了不可达的系统代理（http_proxy/https_proxy），pip/HF 继承后
+# 报 ProxyError Connection refused。镜像国内直连即可达，加入 NO_PROXY 绕过；
+# DeepSeek API（api.deepseek.com）仍走用户代理（海外环境依赖代理时不受影响）。
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}pypi.tuna.tsinghua.edu.cn,hf-mirror.com"
+export no_proxy="$NO_PROXY"
+
 if [ ! -d .venv ]; then
     echo "创建虚拟环境..."
     python3 -m venv .venv
