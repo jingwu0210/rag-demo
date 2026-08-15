@@ -39,7 +39,7 @@ def load_test_set(path: str = None) -> List[dict]:
 
     返回元素形如 {question, ground_truth, relevant_chunks, language, is_out_of_scope}。
     """
-    test_set_path = path or ConfigRegistry.get("eval.test_set_path", "data/eval/test_set.json")
+    test_set_path = path or ConfigRegistry.get("eval.test_set_path", "assets/testsets/test_set.json")
     try:
         with open(test_set_path, "r", encoding="utf-8") as f:
             test_set = json.load(f)

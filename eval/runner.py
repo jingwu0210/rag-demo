@@ -559,9 +559,9 @@ if __name__ == "__main__":  # pragma: no cover
     from storage.sqlite_client import init_db
 
     parser = argparse.ArgumentParser(description="RAG 三配置对比评估（CLI）")
-    parser.add_argument("--output", default="data/eval/results/",
+    parser.add_argument("--output", default="workspace/results/",
                         help="报表输出目录（写入 eval_report.csv / eval_report.md），"
-                             "默认 data/eval/results/")
+                             "默认 workspace/results/")
     parser.add_argument("--test-set", default=None,
                         help="测试集 JSON 路径，默认取 config eval.test_set_path")
     args = parser.parse_args()

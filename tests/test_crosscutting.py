@@ -1,7 +1,7 @@
 """横切模块测试：CacheManager（L1 缓存）+ ResilienceGuard（并发/超时守卫）+ ConversationCompressor（对话压缩）
 
 - 项目未装 pytest-asyncio：异步测试用 asyncio.run 包同步测试函数
-- 缓存测试通过 override paths.sqlite 指向 tempfile，不污染真实 data/cache.db
+- 缓存测试通过 override paths.sqlite 指向 tempfile，不污染真实 workspace/cache.db
 - ConfigRegistry 每测试 init("config.yaml") 重置，再按需 override
 """
 import asyncio

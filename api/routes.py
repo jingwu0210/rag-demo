@@ -164,7 +164,7 @@ async def ingest(request: Request,
     """文档入库冷路径：保存上传文件 → run_in_threadpool 执行同步 ingest"""
     ingest_service = request.app.state.ingest_service
 
-    corpus_dir = ConfigRegistry.get("paths.corpus", "data/corpus")
+    corpus_dir = ConfigRegistry.get("paths.corpus", "assets/corpus")
     os.makedirs(corpus_dir, exist_ok=True)
     safe_name = os.path.basename(file.filename or "upload.bin") or "upload.bin"
     dest = os.path.join(corpus_dir, safe_name)

@@ -1,6 +1,6 @@
 """生成 mock 语料：10 个文档，覆盖双语/双版本/扫描件/注入样本/PII/过期文档测试点。
 
-用法: .venv/bin/python scripts/generate_corpus.py [--output data/corpus]
+用法: .venv/bin/python scripts/generate_corpus.py [--output assets/corpus]
 生成后入库: .venv/bin/python scripts/ingest_corpus.py
 """
 import os
@@ -343,7 +343,7 @@ def make_scanned_hr_notice(output_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="data/corpus")
+    parser.add_argument("--output", default="assets/corpus")
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
     print(f"生成语料到 {args.output}/")

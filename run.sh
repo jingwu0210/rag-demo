@@ -26,10 +26,10 @@ if [ ! -d .venv ]; then
     python3 -m venv .venv
 fi
 .venv/bin/pip install -q -r requirements.txt -i "$PIP_INDEX_URL"
-mkdir -p data/{corpus,chroma,ocr,logs,eval/results}
+mkdir -p assets/{corpus,testsets,chroma} workspace/{ocr,logs,results}
 
 # ── 幂等引导：知识库为空时自动入库 ─────────────────────────────
-# 空库时分两路：① data/corpus/ 已有用户文档 → 直接入库用户语料（不生成演示语料）
+# 空库时分两路：① assets/corpus/ 已有用户文档 → 直接入库用户语料（不生成演示语料）
 #              ② 无用户文档 → 生成演示语料并入库（一键演示场景）
 # 老用户重启服务不会重复入库；NO_BOOTSTRAP=1 可强制跳过
 if [ "${NO_BOOTSTRAP}" != "1" ]; then
@@ -41,13 +41,13 @@ s = ChromaStore()
 print(len(s.collection.get(where={'is_active': True})['ids']))
 " 2>/dev/null || echo "0")
     if [ "${ACTIVE_COUNT:-0}" = "0" ]; then
-        USER_DOCS=$(find data/corpus -type f \( -name "*.pdf" -o -name "*.docx" \
+        USER_DOCS=$(find assets/corpus -type f \( -name "*.pdf" -o -name "*.docx" \
             -o -name "*.md" -o -name "*.txt" \) 2>/dev/null | head -1)
         if [ -n "${USER_DOCS}" ]; then
-            echo "知识库为空，检测到 data/corpus/ 下已有用户语料，直接入库（首次需下载 BGE-M3 模型）..."
+            echo "知识库为空，检测到 assets/corpus/ 下已有用户语料，直接入库（首次需下载 BGE-M3 模型）..."
             .venv/bin/python scripts/ingest_corpus.py
         else
-            echo "知识库为空，data/corpus/ 下无用户语料，生成演示语料并入库（首次需下载 BGE-M3 模型）..."
+            echo "知识库为空，assets/corpus/ 下无用户语料，生成演示语料并入库（首次需下载 BGE-M3 模型）..."
             .venv/bin/python scripts/generate_corpus.py
             .venv/bin/python scripts/ingest_corpus.py
             .venv/bin/python scripts/verify_corpus.py

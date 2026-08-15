@@ -131,3 +131,4 @@
 - 口径变更注记：R4 的 compliance/unanswered_rate 为旧口径（见 R4 表注），v1.10 起两指标语义变更，R5 起按新口径记录；跨口径对比时需注明
 - 测试集版本注记：R5 起使用 `test_set_v2.json`（80 条 = 原 65 条 + 15 条新增），test_set_hash 与 R4 不同；R4→R5 对比按 65 条公共问题子集（per_qa question 交集）重算，对比表须标注"公共子集口径"
 - R5 完整（per_qa 含 judge_reason 与分层字段），三配置 80 条共 240 条明细
+- 路径注记：v1.15 起目录分层（assets/workspace），此前 run 记录中的 data/ 路径为当时结构（data/cache.db → workspace/cache.db、data/eval/results → workspace/results）

@@ -8,7 +8,7 @@
 - 框架: structlog（JSON 输出）
 - 格式: **头部四字段平铺 + 业务数据分组嵌套**（zap / OpenTelemetry 风格）— 固定键序 `timestamp → level → event → module`，业务数据按语义分组（request / query / cache / retrieval / rerank / llm / answer / refusal / pii / summary / chunks）
 - 请求追踪: 每请求生成 `request_id`（UUID），API 层 `bind_contextvars` 绑定，Service 层经 `get_request_id()` 读取放入 `request.id`，全链路透传
-- 日志去向: stdout（structlog PrintLoggerFactory）；eval.sh 做 stdout/stderr 分流 — 结构化日志写入 `data/logs/eval-<timestamp>.log`，第三方库裸噪音（urllib3 警告 / chromadb telemetry / tokenizers）单独存 `*.stderr.log`，不污染主日志
+- 日志去向: stdout（structlog PrintLoggerFactory）；eval.sh 做 stdout/stderr 分流 — 结构化日志写入 `workspace/logs/eval-<timestamp>.log`，第三方库裸噪音（urllib3 警告 / chromadb telemetry / tokenizers）单独存 `*.stderr.log`，不污染主日志
 - 日志与数据的职责分工: 日志 = 事件流（轻量、流式、可 grep）；DB = 数据仓库（turns / request_metrics 表存 query/answer 全文与指标，可 SQL 聚合）
 
 ## 2. 通用头部字段（每条日志必含，顺序固定）

@@ -4,7 +4,7 @@ from core.config import ConfigRegistry
 
 class ChromaStore:
     def __init__(self):
-        persist_dir = ConfigRegistry.get("chromadb.persist_directory", "data/chroma")
+        persist_dir = ConfigRegistry.get("chromadb.persist_directory", "assets/chroma")
         self._client = chromadb.PersistentClient(
             path=persist_dir,
             settings=Settings(anonymized_telemetry=False)
