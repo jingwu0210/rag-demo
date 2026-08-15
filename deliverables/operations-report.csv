@@ -1,0 +1,3 @@
+source,total_requests,p50_ms,p95_ms,avg_tokens,cache_hit_rate,refusal_rate,pii_redact_total,injection_blocked_total
+chat,475,2281,6002,2222.1,12.84,14.53,12,12
+eval,1054,2167,6323,2552.3,0.95,13.19,46,32

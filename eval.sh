@@ -90,7 +90,7 @@ asyncio.run(CacheManager().invalidate_all())
 # ── ② 评估（后台跑 + 进度条）────────────────────────────
 echo "🚀 开始评估"
 echo "   测试集: ${TEST_SET} 条 × ${CONFIGS} 个检索配置（vector-only / hybrid / hybrid+rerank）"
-echo "   并发: 5（config eval.concurrency），预计 40-50 分钟（A 方案全文 rerank 后）"
+echo "   并发: 5（config eval.concurrency），预计 10-15 分钟（300char 截断 + judge 关思考后）"
 # stdout = structlog JSON 结构化日志（符合日志字段字典）；
 # stderr = 第三方库裸噪音，单独存 .stderr.log，不污染主日志文件
 .venv/bin/python -m eval.runner --output workspace/results/ \

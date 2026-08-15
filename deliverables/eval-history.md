@@ -8,9 +8,10 @@
 |------|------|:---:|------|--------|
 | R6 | 2026-08-15 下午 | 110 条（baseline） | 新语料 baseline 首轮（用户语料 252 chunks + F1-F4 修复前）；在册异常见 R6 表 | eval_20260815_153126_066eddcb |
 | R7 当前 | 2026-08-15 夜 | 110 条（baseline） | F1 空格 PDF 根治 + F2 OOS 口径 + F3 PII 扩展 + F4 judge 盲区 + max_chunks 10 + expire 开启；全指标达标 | eval_20260815_173117_b48364fd |
-| R8 当前 | 2026-08-16 | 110 条（baseline） | v1.17 数据失真修复：judge/generator/Ragas 关思考、300char 截断 + timeout 7s、OOS 关键词+注入检测、eval 缓存隔离、超时语义 + OOS 软拒 judge；全指标达标 | eval_20260816_013749_061408b0 |
+| R8 中间态 | 2026-08-16 | 110 条（baseline） | v1.17 数据失真修复（OOS 软拒 judge 落地前）：judge/generator/Ragas 关思考、300char 截断 + timeout 7s、OOS 关键词+注入检测、eval 缓存隔离、超时语义 | eval_20260816_013749_061408b0 |
+| R9 当前 | 2026-08-16 | 110 条（baseline） | OOS 软拒 judge 落地（软拒答计入正确）：OOS 拒答率 0.72→1.0、Refusal 0.9455→0.9909；全指标达标 | eval_20260816_022054_4243d245 |
 
-> R1-R5（53/65/80 条旧语料）已归档至 [`archived/eval-history-r1-r5.md`](archived/eval-history-r1-r5.md)，不再作为 before/after 对比依据；**当前有效轮次为 R6-R8**。
+> R1-R5（53/65/80 条旧语料）已归档至 [`archived/eval-history-r1-r5.md`](archived/eval-history-r1-r5.md)，不再作为 before/after 对比依据；**当前有效轮次为 R6-R9**。
 
 ---
 
@@ -71,7 +72,7 @@
 | 5 | 口语短问句拒答（P2c 代价） | "公司年假有几天？" vector top1=0.236，BM25 命中"年假"但被 P2c 滤空 | ⏳ P2d 待做（用户暂缓） |
 | 6 | 模型代际 | R7 为 deepseek-chat 产物（2026-07-24 停服）；v1.17 起 deepseek-v4-flash，历史对比需注明模型差异 | 📝 已切换 config |
 
-## R8 当前数据（110 条 baseline，v1.17 数据失真修复后）
+## R8 数据（110 条 baseline，中间态：OOS 软拒 judge 落地前）
 
 | Config | Faithfulness | Context Precision | Answer Compliance | Refusal | Style | P50 (ms) | P95 (ms) | Avg Tokens |
 |--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -104,6 +105,20 @@
 | 5 | 超时误判漏拒 | 检索超时 → 空 sources → low_confidence | 超时语义（返回"系统繁忙"）+ refusal 排除 |
 | 6 | 拒答污染缓存 | 误拒结果 cache.put 达 TTL | 拒答不进缓存 |
 
+## R9 当前数据（110 条 baseline，OOS 软拒 judge 落地后）
+
+> R9 = R8 + OOS 软拒 judge。R8 的 OOS 拒答率 0.7222 只统计硬拒，把 5 个"软拒答"（拒答无法回答的部分 + 提供相关信息）误判成漏拒；R9 用 OOS 软拒 judge 把软拒也判为正确。
+
+| Config | Faithfulness | Context Precision | Answer Compliance | Refusal | Style | P50 (ms) | P95 (ms) |
+|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| vector-only | 0.9414 | 0.8138 | 0.9067 | 0.9909 | 0.8896 | 1279 | 2619 |
+| hybrid | 0.9289 | 0.7748 | 0.9465 | 0.9909 | 0.8917 | 1157 | 2562 |
+| hybrid+rerank | 0.9393 | 0.7978 | 0.9070 | 0.9909 | 0.8875 | 3303 | 5636 |
+
+分层视图（三配置一致）：OOS 拒答率 **1.0**（18/18 正确处理：13 硬拒 + 5 软拒）、正常业务拒答正确率 0.9891、未作答 14/0/0。
+
+**全部达标**：Faithfulness ≥0.85 ✓ / CP ≥0.70 ✓ / Compliance ≥0.80 ✓ / Refusal ≥0.80 ✓（0.9909）/ Style ≥0.85 ✓。
+
 ## 数据完整性声明
 
 - R1/R2 的 eval_history 明细（per_qa）因 2026-08-13 的 `rm data/cache.db` 操作事故丢失，本档案数据从当时读取的报表内容恢复（聚合值完整，per_qa 明细不可恢复）
@@ -114,5 +129,6 @@
 - R5 完整（per_qa 含 judge_reason 与分层字段），三配置 80 条共 240 条明细
 - R7 完整（per_qa 含 judge_reason），三配置 110 条共 330 条明细
 - R8 完整（per_qa 含 judge_reason + refusal_reason），三配置 110 条共 330 条明细
+- R9 完整（per_qa 含 judge_reason + refusal_reason），三配置 110 条共 330 条明细
 - 模型注记：R1-R7 均为 deepseek-chat（2026-07-24 停服）；R8 起为 deepseek-v4-flash，历史对比需标注模型代际差异
 - 路径注记：v1.15 起目录分层（assets/workspace），此前 run 记录中的 data/ 路径为当时结构（data/cache.db → workspace/cache.db、data/eval/results → workspace/results）
