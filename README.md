@@ -19,6 +19,36 @@ export DEEPSEEK_API_KEY=<your-key>
                 # 需先跑过 ./run.sh（venv + 知识库引导）；缺 key/环境/知识库会明确报错
 ```
 
+**自定义语料（用你自己的文档替代演示语料）**：
+
+```bash
+# 1. 把自己公司的文档（支持 pdf / docx / md / txt）放进 data/corpus/ 目录
+#    （可建子目录，如 data/corpus/员工手册/xxx.pdf）
+# 2. 首次运行 ./run.sh 时会自动检测到你的文档并直接入库，
+#    不会生成演示语料（空库 + 无用户文档时才生成演示语料）
+./run.sh
+
+# 知识库已非空时，后续补充文档：
+.venv/bin/python scripts/ingest_corpus.py          # 增量扫描 data/corpus/ 入库
+# 或服务运行中单文件入库：
+#   POST /ingest（multipart: file + doc_type + version?）
+# 注意：若先跑过演示语料引导，再入库自己的文档，两类内容会混在同一知识库中；
+#      想要"纯自己语料"的知识库，请先把文档放入 data/corpus/ 后再首次运行 ./run.sh。
+```
+
+**配套测试集（用自己的语料评估时）**：
+
+预置测试集 `data/eval/test_set_v2.json`（80 条）是针对演示语料设计的问题——用你自己的语料后，这些问题的答案不在你的知识库里，评估会大面积拒答。请为你的语料准备配套测试集（JSON 格式）：
+
+```json
+[
+  {"question": "你的问题？", "ground_truth": "基于你的文档的参考答案",
+   "relevant_chunks": [], "language": "zh", "is_out_of_scope": false}
+]
+```
+
+放置方式二选一：① 直接替换 `data/eval/test_set_v2.json`；② 存为独立文件并在 config.yaml 改 `eval.test_set_path` 指向它。建议混入 10-20% 知识库外的 out-of-scope 问题（`is_out_of_scope: true`）以测拒答能力。
+
 **镜像 override（海外环境可选）**：脚本默认使用国内镜像（HuggingFace `https://hf-mirror.com`、pip 清华源）。海外环境如镜像不可用，可显式覆盖：
 
 ```bash

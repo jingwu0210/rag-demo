@@ -94,7 +94,7 @@
 | v1.11 | 2026-08-15 | P1h 双通道 RRF 二次融合（修复 rerank 排序失真）：rerank 后 final = 1/(k+粗排位次) + 1/(k+rerank位次)，精排不独裁（rrf_k 与粗排融合共用 retrieval.fusion.rrf_k）；Reranker.rerank 增加 top_n 参数（不传=config 截断 / 显式 None=全量供融合取位次 / N=截断）；依据 R4 失真证据（API Spec -78%、休假制度 -49%、通用章节 +36%），见 §4.4 |
 | v1.12 | 2026-08-15 | P2 hybrid 融合噪声过滤：RRF 加权（vector_weight 1.0 / bm25_weight 0.8 软降权）+ 融合后 vec_sim ≥ 0.45 硬过滤（纯 BM25 命中视为 0 被滤，过滤在 AdaptiveK 之前，rerank 粗排池同样受益；vector_top1_sim 旁路语义不变）。实测依据：术语类 17 条答案依据 chunk 余弦全部 ≥0.4781 零误杀（铁律 6 验证），见 §4.3 ①.1 |
 | v1.13 | 2026-08-15 | P4 分层指标报表（oos_refusal_rate / normal_refusal_rate / 未作答三类分解，CSV 15→17 列）；测试集 v2（80 条 = 原 65 条 + 三类区分度样本 15 条，多义词类语料不支持不硬造）；发现 R4 时 chroma HNSW 索引未完整落盘（与元数据不同步，挂账观察） |
-| v1.14 | 2026-08-15 | 一键交付契约：唯一外部依赖 = DeepSeek API Key。run.sh/eval.sh 增加 key 前置检查（缺失明确报错）、HF_ENDPOINT/PIP_INDEX_URL 镜像兜底（默认国内镜像、环境变量可 override）、**代理兼容（镜像域名 NO_PROXY 绕过系统代理，DeepSeek API 仍走用户代理）**、eval.sh 增加 venv/知识库前置检查；测试集默认切换 v2；日志 JSONRenderer ensure_ascii=False（中文直接可读，与字段字典样例一致）；R5 实测闭环 max_workers 5 的 MPS 无退化假设 |
+| v1.14 | 2026-08-15 | 一键交付契约：唯一外部依赖 = DeepSeek API Key。run.sh/eval.sh 增加 key 前置检查（缺失明确报错）、HF_ENDPOINT/PIP_INDEX_URL 镜像兜底（默认国内镜像、环境变量可 override）、**代理兼容（镜像域名 NO_PROXY 绕过系统代理，DeepSeek API 仍走用户代理）**、**空库引导双路（data/corpus/ 已有用户文档 → 直接入库用户语料不生成演示语料；无用户文档 → 生成演示语料）**、eval.sh 增加 venv/知识库前置检查；测试集默认切换 v2；日志 JSONRenderer ensure_ascii=False（中文直接可读，与字段字典样例一致）；R5 实测闭环 max_workers 5 的 MPS 无退化假设 |
 
 ---
 
