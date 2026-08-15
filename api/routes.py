@@ -321,35 +321,47 @@ async def _fetch_request_metrics() -> List[dict]:
         await db.close()
 
 
-def _build_report_csv(rows: List[dict]) -> str:
-    """request_metrics 聚合 → metric,value CSV。
+_REPORT_SOURCES = ("chat", "eval")
 
-    p50/p95 用 numpy.percentile（latency_total），token 汇总、cache_hit_rate、
-    refusal_rate、pii/injection 汇总。无数据 → 仅表头。
+
+def _group_report_metrics(group: List[dict], suffix: str) -> List[tuple]:
+    """单 source 分组的指标行（suffix 形如 "[chat]"；latency 聚合用 numpy.percentile）"""
+    n = len(group)
+    latencies = [int(r["latency_total"] or 0) for r in group]
+    token_total = sum(int(r["token_total"] or 0) for r in group)
+    cache_hits = sum(1 for r in group if r["cache_hit"])
+    refusals = sum(1 for r in group if r["refused"])
+    pii_total = sum(int(r["pii_redact_count"] or 0) for r in group)
+    inj_total = sum(int(r["injection_blocked"] or 0) for r in group)
+    return [
+        (f"total_requests{suffix}", n),
+        (f"p50_latency_ms{suffix}", int(np.percentile(latencies, 50))),
+        (f"p95_latency_ms{suffix}", int(np.percentile(latencies, 95))),
+        (f"total_tokens{suffix}", token_total),
+        (f"avg_tokens_per_call{suffix}", round(token_total / n, 2)),
+        (f"cache_hit_rate{suffix}", round(cache_hits / n, 4)),
+        (f"refusal_rate{suffix}", round(refusals / n, 4)),
+        (f"pii_redactions_total{suffix}", pii_total),
+        (f"injections_blocked_total{suffix}", inj_total),
+    ]
+
+
+def _build_report_csv(rows: List[dict]) -> str:
+    """request_metrics 聚合 → metric,value CSV（按 source 分组，metric 名带 [chat]/[eval] 后缀）。
+
+    每 metric 拆两行（如 p50_latency_ms[chat] 与 p50_latency_ms[eval]），chat/eval 分开统计，
+    评估跑批不再污染用户对话报表。旧库行（无 source 字段）一律归入 chat 组。
+    无数据 → 仅表头。
     """
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(["metric", "value"])
-    n = len(rows)
-    if n == 0:
+    if not rows:
         return out.getvalue()
-    latencies = [int(r["latency_total"] or 0) for r in rows]
-    token_total = sum(int(r["token_total"] or 0) for r in rows)
-    cache_hits = sum(1 for r in rows if r["cache_hit"])
-    refusals = sum(1 for r in rows if r["refused"])
-    pii_total = sum(int(r["pii_redact_count"] or 0) for r in rows)
-    inj_total = sum(int(r["injection_blocked"] or 0) for r in rows)
-    writer.writerows([
-        ("total_requests", n),
-        ("p50_latency_ms", int(np.percentile(latencies, 50))),
-        ("p95_latency_ms", int(np.percentile(latencies, 95))),
-        ("total_tokens", token_total),
-        ("avg_tokens_per_call", round(token_total / n, 2)),
-        ("cache_hit_rate", round(cache_hits / n, 4)),
-        ("refusal_rate", round(refusals / n, 4)),
-        ("pii_redactions_total", pii_total),
-        ("injections_blocked_total", inj_total),
-    ])
+    for source in _REPORT_SOURCES:
+        group = [r for r in rows if (r.get("source") or "chat") == source]
+        if group:
+            writer.writerows(_group_report_metrics(group, f"[{source}]"))
     return out.getvalue()
 
 
@@ -515,19 +527,47 @@ async def db_tables():
         await db.close()
 
 
+def _build_where_like(info, q: Optional[str]):
+    """q 过滤：仅对 TEXT 类型列构造 `col LIKE ?`（参数 %q%，包含匹配）。
+
+    info 为 PRAGMA table_info 行（r["name"] / r["type"]）；q 为空或无 TEXT 列 → 不过滤。
+    返回 (where_sql, params)。
+    """
+    if not q:
+        return "", []
+    text_cols = [r["name"] for r in info
+                 if str(r["type"] or "").upper() == "TEXT"]
+    if not text_cols:
+        return "", []
+    where = " WHERE " + " OR ".join(f"{c} LIKE ?" for c in text_cols)
+    return where, [f"%{q}%"] * len(text_cols)
+
+
 @router.get("/db/table/{table_name}")
-async def db_table(table_name: str, limit: int = 50):
-    """表数据预览：{name, columns, rows}（rows=值数组行，limit≤200，字段截断 500 字符）。
-    表名不在白名单 → 404。"""
+async def db_table(table_name: str, limit: int = 50, offset: int = 0,
+                   q: Optional[str] = None):
+    """表数据预览：{name, columns, rows, total}（rows=值数组行，limit≤200，字段截断 500 字符）。
+
+    rows 按 rowid 降序（最新在前）；offset 分页（offset≥0）；q 对 TEXT 列 LIKE 包含过滤，
+    total=过滤后总行数（与分页联动）。表名不在白名单 → 404。"""
     if table_name not in _DB_TABLES:
         raise HTTPException(status_code=404, detail=f"未知表：{table_name}")
     n = min(max(limit, 1), _MAX_DB_ROWS)
+    offset = max(offset, 0)
     db = await get_db()
     try:
         cur = await db.execute(f"PRAGMA table_info({table_name})")
-        columns = [r["name"] for r in await cur.fetchall()]
-        cur = await db.execute(f"SELECT * FROM {table_name} LIMIT ?", (n,))
+        info = await cur.fetchall()
+        columns = [r["name"] for r in info]
+        where_sql, params = _build_where_like(info, q)
+        cur = await db.execute(
+            f"SELECT COUNT(*) AS n FROM {table_name}{where_sql}", params)
+        row = await cur.fetchone()
+        total = int(row["n"])
+        cur = await db.execute(
+            f"SELECT * FROM {table_name}{where_sql} "
+            f"ORDER BY rowid DESC LIMIT ? OFFSET ?", params + [n, offset])
         rows = [[_truncate_cell(v) for v in row] for row in await cur.fetchall()]
     finally:
         await db.close()
-    return {"name": table_name, "columns": columns, "rows": rows}
+    return {"name": table_name, "columns": columns, "rows": rows, "total": total}

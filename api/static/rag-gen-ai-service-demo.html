@@ -125,6 +125,24 @@
 
   /* ═══ Chat：workspace ═══ */
   .ws{display:flex;flex-direction:column;gap:14px;min-width:0}
+  /* pipeline stepper（沿用 intra-rag demo.html 的 .rail/.step 视觉语言） */
+  .rail{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .step{flex:1;display:flex;align-items:center;gap:10px;padding:11px 14px;position:relative;min-width:0}
+  .step:not(:last-child)::after{content:"›";position:absolute;right:2px;color:var(--line);font-size:18px;font-weight:700}
+  .step .n{width:26px;height:26px;flex:0 0 26px;border-radius:50%;background:var(--bg);border:1px solid var(--line);
+    color:var(--mut);display:grid;place-items:center;font:700 12px var(--mono);transition:all .25s}
+  .step .l{min-width:0}
+  .step .l .t{font:600 12px var(--mono);letter-spacing:.3px;text-transform:uppercase;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .step .l .s{font:11px var(--mono);color:var(--mut);opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .step.done .n{background:var(--teal);border-color:var(--teal);color:#fff}
+  .step.done .l .t{color:var(--ink)}
+  .step.active .n{background:var(--amber);border-color:var(--amber);color:#fff;box-shadow:0 0 0 4px rgba(245,158,11,.22)}
+  .step.active .l .t{color:var(--ink)}
+  .step.pending{opacity:.55}
+  .step.skip .n{background:var(--bg);border-color:var(--line);color:var(--mut)}
+  .step.skip .l .t{color:var(--mut)}
+  .step.bad .n{background:var(--bad);border-color:var(--bad);color:#fff}
+  .step.bad .l .t{color:var(--bad)}
   .banner{display:flex;gap:8px;align-items:center;border-radius:10px;padding:9px 13px;margin-bottom:11px;font-weight:600;font-size:13px}
   .banner.ok{background:var(--ok-soft);color:var(--ok);border:1px solid #a7e0c8}
   .banner.bad{background:var(--bad-soft);color:var(--bad);border:1px solid #f3bebe}
@@ -261,6 +279,9 @@
   .log-tail{background:#0d1520;color:#9fe8c3;font:12px/1.6 var(--mono);border-radius:12px;padding:14px;
     max-height:520px;overflow:auto;white-space:pre-wrap;word-break:break-all}
   .log-tail .log-meta{color:#64748b}
+  .pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 2px}
+  .pager .pg-info{font:11.5px var(--mono);color:var(--mut)}
+  .pager select{min-width:96px}
   .db-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-bottom:12px}
   .db-btn{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--line);
     background:var(--bg);border-radius:9px;padding:9px 12px;cursor:pointer;font:12.5px var(--mono);color:var(--ink);text-align:left}
@@ -351,7 +372,7 @@
             <div class="msg hint">输入问题开始对话。会话 ID 保存在浏览器 localStorage，可多轮追问；右侧显示检索模式、答案、来源与 prompt。</div>
           </div>
           <form class="chat-form" id="chatForm">
-            <input id="chatInput" placeholder="向知识库提问… 例：公司年假有几天？" autocomplete="off">
+            <input id="chatInput" placeholder="向知识库提问… 例：员工每年带薪病假的上限是多少天？" autocomplete="off">
             <button id="sendBtn" type="submit">发送</button>
           </form>
         </aside>
@@ -368,6 +389,14 @@
                 <button class="seg-btn" data-mode="hybrid+rerank">hybrid+rerank</button>
               </div>
             </div>
+          </div>
+
+          <!-- pipeline 步骤条：发送时动态推进；响应后按 timing_ms 标定 -->
+          <div class="rail" id="pipelineRail" role="list" aria-label="Pipeline steps">
+            <div class="step pending" data-i="0"><span class="n">1</span><div class="l"><div class="t">Retrieval</div><div class="s">vector / hybrid → top-K</div></div></div>
+            <div class="step pending" data-i="1"><span class="n">2</span><div class="l"><div class="t">Rerank</div><div class="s">cross-encoder → top-5</div></div></div>
+            <div class="step pending" data-i="2"><span class="n">3</span><div class="l"><div class="t">Generation</div><div class="s">grounded answer</div></div></div>
+            <div class="step pending" data-i="3"><span class="n">4</span><div class="l"><div class="t">Done</div><div class="s">—</div></div></div>
           </div>
 
           <!-- 答案 -->
@@ -497,16 +526,18 @@
       <!-- Logs -->
       <div class="tab-pane" id="tab-logs">
         <div class="panel">
-          <div class="panel-head"><span class="k">日志查看</span><span class="desc">结构化 JSON 日志 tail</span></div>
+          <div class="panel-head"><span class="k">日志查看</span><span class="desc">结构化 JSON 日志 tail（最新在前）</span></div>
           <div class="panel-body">
             <div class="log-bar">
               <div class="fld"><label>日志文件</label><select id="logFile"></select></div>
               <div class="fld"><label>行数</label>
                 <select id="logLines"><option value="50">50</option><option value="200" selected>200</option><option value="1000">1000</option><option value="5000">5000</option></select>
               </div>
+              <div class="fld"><label>关键词</label><input id="logFilter" placeholder="过滤日志行…" /></div>
               <button class="btn ghost" id="logLoadBtn">📜 加载</button>
             </div>
             <div class="log-tail" id="logTail"><span class="log-meta">选择日志文件并点击加载。</span></div>
+            <div class="pager" id="logPager"></div>
           </div>
         </div>
       </div>
@@ -514,7 +545,7 @@
       <!-- Database -->
       <div class="tab-pane" id="tab-db">
         <div class="panel">
-          <div class="panel-head"><span class="k">数据库</span><span class="desc">SQLite 表清单 + 数据预览</span></div>
+          <div class="panel-head"><span class="k">数据库</span><span class="desc">SQLite 表清单 + 数据预览（最新在前）</span></div>
           <div class="panel-body">
             <div class="db-list" id="dbTables"><div class="loading"><span class="spin"></span>正在加载表清单…</div></div>
             <div id="dbPreview"></div>
@@ -747,6 +778,68 @@ $("promptHead").addEventListener("click", () => {
   $("promptHead").setAttribute("aria-expanded", String(!closed));
 });
 
+/* pipeline 步骤条：发送时前端模拟推进（400ms/步，至 Generation），
+   响应后按 timing_ms 标定各步耗时；refused → Done 标红"拒答"；
+   from_cache → 全部即时 Done 标"缓存命中" */
+const RAIL_DEF = [
+  "vector / hybrid → top-K",
+  "cross-encoder → top-5",
+  "grounded answer",
+  "—",
+];
+let railTimer = null;
+function setStep(i, state, sub){
+  const step = document.querySelector(`#pipelineRail .step[data-i="${i}"]`);
+  if(!step) return;
+  step.classList.remove("pending", "active", "done", "skip", "bad");
+  step.classList.add(state);
+  if(sub !== undefined) step.querySelector(".s").textContent = sub;
+}
+function resetRail(){
+  stopRail();
+  document.querySelectorAll("#pipelineRail .step").forEach((s, i) => {
+    setStep(i, "pending", RAIL_DEF[i]);
+  });
+}
+function stopRail(){
+  if(railTimer){ clearInterval(railTimer); railTimer = null; }
+}
+function startRail(){
+  resetRail();
+  setStep(0, "active");
+  let i = 0;
+  railTimer = setInterval(() => {
+    i += 1;
+    if(i > 2){ stopRail(); return; }          // 停在 Generation（active），等待响应
+    setStep(i - 1, "done");
+    setStep(i, "active");
+  }, 400);
+}
+/* 响应到达：按 timing_ms 标定各步 */
+function finalizeRail(data){
+  stopRail();
+  const t = data.timing_ms || {};
+  const mode = data.mode || "";
+  const reranked = !(mode === "vector-only" || mode === "hybrid");
+  const fmtMs = v => (v == null || v === "" ? "—" : v + " ms");
+  if(data.from_cache){
+    for(let i = 0; i < 4; i++) setStep(i, "done", "缓存命中");
+    setStep(3, "done", t.total != null ? "缓存命中 · " + t.total + " ms" : "缓存命中");
+    return;
+  }
+  setStep(0, "done", fmtMs(t.retrieval));
+  if(reranked) setStep(1, "done", fmtMs(t.rerank));
+  else setStep(1, "skip", "—（本模式不经重排）");
+  setStep(2, "done", fmtMs(t.generation));
+  if(data.refused){
+    const reason = {low_confidence: "低置信", out_of_scope: "超范围", safety: "安全"}[data.refusal_reason]
+      || data.refusal_reason || "";
+    setStep(3, "bad", "拒答" + (reason ? " · " + reason : ""));
+  }else{
+    setStep(3, "done", fmtMs(t.total));
+  }
+}
+
 /* Chat 响应渲染：答案区 + 元信息条 + 来源 + prompt */
 function renderChatResult(data){
   const body = $("ansBody");
@@ -765,17 +858,34 @@ function renderChatResult(data){
   const ans = el("div", "ans");
   ans.innerHTML = renderAnswer(data.answer || "");
   frag.append(ans);
-  // 元信息条
+  // 元信息条：请求画像 = mode / chunks / sources_count / vector_top1_sim / timing 分解 / token / session
   const pills = el("div", "pills");
   const sources = data.sources || [];
   const finalChunks = data.final_chunks != null ? data.final_chunks : sources.length;
+  const timing = data.timing_ms || {};
+  // vector_top1_sim：响应无该字段，取 sources 最高 score；语义随 mode
+  //（vector-only=余弦 0-1 / hybrid=RRF ~0.03 / hybrid+rerank=CrossEncoder 无界）
+  const top1 = Math.max(...sources.map(s => s.score).filter(v => v != null), -Infinity);
+  const top1El = pill("vector_top1_sim", top1 > -Infinity ? top1.toFixed(4) : "—");
+  top1El.title = "sources 最高 score（语义随 mode：vector-only 余弦 / hybrid RRF / +rerank CrossEncoder）";
+  const fmtMs = v => (v == null || v === "" ? "—" : v + " ms");
   pills.append(
     pill("mode", data.mode || "—"),
     pill("final_chunks", String(finalChunks) + "（AdaptiveK）"),
-    pill("本次延迟", (data.timing_ms && data.timing_ms.total != null) ? data.timing_ms.total + " ms" : "—"),
+    pill("sources_count", String(sources.length)),
+    top1El,
+    pill("retrieval", fmtMs(timing.retrieval)),
+    pill("rerank", fmtMs(timing.rerank)),
+    pill("generation", fmtMs(timing.generation)),
+    pill("本次延迟", fmtMs(timing.total)),
     pill("token", data.token_usage && data.token_usage.total != null ? fmtNum(data.token_usage.total) : "—"),
     pill("session", data.session_id || "—")
   );
+  if(data.refused){
+    const reason = {low_confidence: "低置信", out_of_scope: "超范围", safety: "安全"}[data.refusal_reason]
+      || data.refusal_reason || "未知";
+    pills.append(pill("refusal_reason", reason, "warn"));
+  }
   if(data.from_cache) pills.append(pill("cache", "命中", "warn"));
   if(data.partial) pills.append(pill("partial", "超时降级", "warn"));
   frag.append(pills);
@@ -797,6 +907,7 @@ function renderChatResult(data){
 async function ask(q){
   addMsg("user", q);
   setBusy(true);
+  startRail();
   const holder = addMsg("assistant", '<span class="spin"></span>正在检索并生成答案…', true);
   try{
     const body = { query: q, mode: currentMode };
@@ -809,9 +920,11 @@ async function ask(q){
     });
     setSessionId(data.session_id);
     renderChatResult(data);
+    finalizeRail(data);
     const head = data.refused ? "⛔ " + (data.refusal_reason || "已拒答") + "\n\n" : "";
     holder.innerHTML = head + renderAnswer(data.answer || "");
   }catch(err){
+    stopRail();
     holder.textContent = "⚠️ 请求失败：" + err.message;
     toast("Chat 请求失败：" + err.message);
   }
@@ -835,15 +948,16 @@ $("clearConv").addEventListener("click", () => {
   $("srcCount").textContent = "—";
   $("ansCount").textContent = "—";
   $("promptPanel").hidden = true;
+  resetRail();
 });
 
-/* 快捷问题 */
+/* 快捷问题：3 条语料内问题（取 assets/testsets/test_set.json 原问题文本）+ 1 条 OOS（演示拒答）。
+   来源标注：handbook/zh/version_adjudication · technical/en · compliance/zh */
 const SUGGESTIONS = [
-  "公司年假有几天？",
-  "给客户的礼物金额上限是多少？",
-  "弹性工作制的核心时间范围？",
-  "What is the limit for accepting gifts from business partners?",
-  "今天上海的天气怎么样？",
+  "员工每年带薪病假的上限是多少天？",                                    // test_set: handbook/zh/version_adjudication（中文手册·数字类）
+  "Which HTTP status code is returned for a validation failure?",     // test_set: technical/en（英文技术类）
+  "客户送了我一张 80 美元的礼品卡，我可以收下吗？",                      // test_set: compliance/zh（合规类）
+  "今天上海的天气怎么样？",                                              // OOS（测试集 out-of-scope 同型），演示拒答
 ];
 $("chips").replaceChildren(...SUGGESTIONS.map(s => {
   const c = el("span", "chip", s);
@@ -879,7 +993,7 @@ function setFile(f){
 function renderIngestResult(r){
   const box = $("ingestResult");
   const card = el("div", "result-card");
-  // status 着色：ingested=绿 / replaced=琥珀 / skipped=灰
+  // status 着色：ingested=绿 / replaced=琥珀 / skipped=灰；单一徽章（emoji+中文文案），不再重复 status 原文
   const stMap = {
     ingested:  ["✅ 已入库",   "ok"],
     replaced:  ["🔄 已替换旧版本", "warn"],
@@ -887,18 +1001,25 @@ function renderIngestResult(r){
   };
   const [label, cls] = stMap[r.status] || [r.status || "—", "mut"];
   const head = el("div", "rc-head");
-  head.append(el("span", "", label), el("span", "st " + cls, r.status || ""));
+  head.append(el("span", "st " + cls, label));
   card.append(head);
   const grid = el("div", "rc-grid");
+  // 0 值显示 "—"（chunks_created/replaced）；doc_hash 64 位长串截断前 12 位，title 保留全文
+  const fmtZero = v => (v == null || v === 0 ? "—" : String(v));
   const kvs = [
-    ["chunks_created", r.chunks_created],
-    ["chunks_replaced", r.chunks_replaced],
-    ["doc_hash", r.doc_hash],
-    ["source_file", r.source_file],
-    ["version", r.version],
+    ["chunks_created", fmtZero(r.chunks_created)],
+    ["chunks_replaced", fmtZero(r.chunks_replaced)],
+    ["doc_hash", r.doc_hash != null ? String(r.doc_hash) : "—"],
+    ["source_file", r.source_file != null ? String(r.source_file) : "—"],
+    ["version", r.version != null ? String(r.version) : "—"],
   ];
   kvs.forEach(([k, v]) => {
-    grid.append(el("div", "kv", k), el("div", "", v != null ? String(v) : "—"));
+    const vEl = el("div", "", v);
+    if(k === "doc_hash" && r.doc_hash && String(r.doc_hash).length > 12){
+      vEl.textContent = String(r.doc_hash).slice(0, 12) + "…";
+      vEl.title = String(r.doc_hash);
+    }
+    grid.append(el("div", "kv", k), vEl);
   });
   if(r.reason) grid.append(el("div", "kv", "reason"), el("div", "", r.reason));
   card.append(grid);
@@ -1221,6 +1342,22 @@ function kpiCard(label, value, unit){
   card.append(v);
   return card;
 }
+/* KPI 卡片（chat/eval 分组双值，如 "200 / 150"；仅单组存在 → 单值；title 提示分组） */
+function kpiCard2(label, kv, metric, unit, isRate){
+  const card = el("div", "kpi");
+  card.append(el("div", "l", label));
+  const c = kv[metric + "[chat]"];
+  const e = kv[metric + "[eval]"];
+  const fmt = isRate ? fmtRate : (x => x == null ? null : fmtNum(x));
+  let val = null;
+  if(c != null && e != null) val = fmt(c) + " / " + fmt(e);
+  else if(c != null || e != null) val = fmt(c != null ? c : e);
+  const v = el("div", "v" + (val == null ? " dim" : ""), val == null ? "—" : String(val));
+  if(val != null && unit) v.append(el("span", "u", unit));
+  card.append(v);
+  card.title = "chat / eval 分组值";
+  return card;
+}
 
 async function loadReport(){
   const kpi = $("kpiRow"), tbl = $("reportTable"), empty = $("reportEmpty");
@@ -1232,23 +1369,25 @@ async function loadReport(){
     const rows = parseCSV(csv);
     const kv = {};
     rows.forEach(([k, v]) => kv[k] = v);
-    $("reportMeta").textContent = kv.total_requests != null
-      ? "共 " + fmtNum(kv.total_requests) + " 条请求" : "—";
+    const totAll = (Number(kv["total_requests[chat]"]) || 0)
+                 + (Number(kv["total_requests[eval]"]) || 0);
+    $("reportMeta").textContent = totAll
+      ? "共 " + fmtNum(totAll) + " 条请求" : "—";
     if(!rows.length || rows[0][0] === "metric" && rows.length === 1){
       empty.hidden = false;
       return;
     }
     empty.hidden = true;
-    // KPI 卡片行：P50 / P95 / token / 缓存命中率 / 拒答率
+    // KPI 卡片行（chat/eval 分组双值）：P50 / P95 / token / 缓存命中率 / 拒答率
     kpi.replaceChildren(
-      kpiCard("P50 延迟", kv.p50_latency_ms, "ms"),
-      kpiCard("P95 延迟", kv.p95_latency_ms, "ms"),
-      kpiCard("总 token", kv.total_tokens != null ? fmtNum(kv.total_tokens) : "—", ""),
-      kpiCard("平均 token/请求", kv.avg_tokens_per_call, ""),
-      kpiCard("缓存命中率", fmtRate(kv.cache_hit_rate), ""),
-      kpiCard("拒答率", fmtRate(kv.refusal_rate), ""),
-      kpiCard("PII 脱敏总数", kv.pii_redactions_total != null ? fmtNum(kv.pii_redactions_total) : "—", ""),
-      kpiCard("注入拦截总数", kv.injections_blocked_total != null ? fmtNum(kv.injections_blocked_total) : "—", "")
+      kpiCard2("P50 延迟", kv, "p50_latency_ms", "ms"),
+      kpiCard2("P95 延迟", kv, "p95_latency_ms", "ms"),
+      kpiCard2("总 token", kv, "total_tokens", ""),
+      kpiCard2("平均 token/请求", kv, "avg_tokens_per_call", ""),
+      kpiCard2("缓存命中率", kv, "cache_hit_rate", "", true),
+      kpiCard2("拒答率", kv, "refusal_rate", "", true),
+      kpiCard2("PII 脱敏总数", kv, "pii_redactions_total", ""),
+      kpiCard2("注入拦截总数", kv, "injections_blocked_total", "")
     );
     // 全量 metric/value 表
     const thead = el("thead");
@@ -1332,7 +1471,58 @@ async function loadHealth(){
 }
 $("healthRefreshBtn").addEventListener("click", loadHealth);
 
-/* ② Logs */
+/* ② Logs（content 行反转最新在前 + 关键词过滤 + 内存分页） */
+const logState = { lines: [], page: 1, pageSize: 100 };
+
+/* 通用分页条：上一页/下一页 + 页码 + 每页条数 select（50/100/200） */
+function pagerBar({page, pageSize, total, onPage, onSize}){
+  const bar = el("div", "pager");
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const btnPrev = el("button", "btn ghost", "← 上一页");
+  btnPrev.disabled = page <= 1;
+  const btnNext = el("button", "btn ghost", "下一页 →");
+  btnNext.disabled = page >= totalPages;
+  const info = el("span", "pg-info",
+    "第 " + page + " / " + totalPages + " 页 · 共 " + total + " 条");
+  const sel = el("select", "");
+  [50, 100, 200].forEach(s => sel.append(new Option(s + " 条/页", String(s))));
+  sel.value = String(pageSize);
+  btnPrev.addEventListener("click", () => onPage(page - 1));
+  btnNext.addEventListener("click", () => onPage(page + 1));
+  sel.addEventListener("change", () => onSize(Number(sel.value)));
+  bar.append(btnPrev, info, btnNext, sel);
+  return bar;
+}
+
+function renderLogPager(total){
+  const bar = $("logPager");
+  bar.replaceChildren();
+  if(total === 0) return;
+  bar.append(pagerBar({
+    page: logState.page, pageSize: logState.pageSize, total,
+    onPage: p => { logState.page = p; renderLogTail(); },
+    onSize: s => { logState.pageSize = s; logState.page = 1; renderLogTail(); },
+  }));
+}
+
+function renderLogTail(){
+  const box = $("logTail");
+  const q = $("logFilter").value.trim();
+  const filtered = q ? logState.lines.filter(l => l.includes(q)) : logState.lines;
+  const total = filtered.length;
+  if(total === 0){
+    box.replaceChildren(el("span", "log-meta", q ? "无匹配行。" : "（日志为空）"));
+    renderLogPager(0);
+    return;
+  }
+  const totalPages = Math.ceil(total / logState.pageSize);
+  if(logState.page > totalPages) logState.page = totalPages;   // 过滤收窄后页码回退
+  const start = (logState.page - 1) * logState.pageSize;
+  box.replaceChildren(document.createTextNode(
+    filtered.slice(start, start + logState.pageSize).join("\n")));
+  renderLogPager(total);
+}
+
 async function loadLogFiles(){
   const sel = $("logFile");
   try{
@@ -1366,7 +1556,9 @@ async function loadLogTail(){
     else if(d.tail != null) text = typeof d.tail === "string" ? d.tail : JSON.stringify(d.tail, null, 2);
     else if(d.log != null) text = typeof d.log === "string" ? d.log : JSON.stringify(d.log, null, 2);
     else text = JSON.stringify(d, null, 2);
-    box.replaceChildren(document.createTextNode(text || "（日志为空）"));
+    logState.lines = text ? text.split(/\r?\n/).reverse() : [];   // 最新行在顶部
+    logState.page = 1;
+    renderLogTail();
   }catch(err){
     box.replaceChildren(el("span", "log-meta", "⚠️ 加载失败：" + err.message));
     toast("日志加载失败：" + err.message);
@@ -1375,8 +1567,17 @@ async function loadLogTail(){
 }
 $("logLoadBtn").addEventListener("click", loadLogTail);
 $("logFile").addEventListener("change", () => { if($("logFile").value) loadLogTail(); });
+/* 关键词过滤：实时过滤已加载行后再分页（纯前端，不发请求） */
+let logFilterTimer = null;
+$("logFilter").addEventListener("input", () => {
+  clearTimeout(logFilterTimer);
+  logFilterTimer = setTimeout(() => { logState.page = 1; renderLogTail(); }, 250);
+});
 
-/* ③ Database */
+/* ③ Database（服务端分页 limit/offset + q 关键词过滤 + 分页条） */
+const dbState = { table: null, page: 1, pageSize: 100, q: "" };
+let dbFilterTimer = null;
+
 async function loadTables(){
   const box = $("dbTables");
   box.replaceChildren(loadingEl("正在加载表清单…"));
@@ -1401,19 +1602,26 @@ async function loadTables(){
     toast("表清单加载失败：" + err.message);
   }
 }
-async function loadTable(name){
+async function fetchDbTable(){
   const box = $("dbPreview");
-  box.replaceChildren(loadingEl("加载 " + esc(name) + " 预览…"));
+  box.replaceChildren(loadingEl("加载 " + esc(dbState.table) + " 预览…"));
   try{
-    const d = await apiJSON("/db/table/" + encodeURIComponent(name));
+    const params = new URLSearchParams({
+      limit: dbState.pageSize,
+      offset: (dbState.page - 1) * dbState.pageSize,
+    });
+    if(dbState.q) params.set("q", dbState.q);
+    const d = await apiJSON("/db/table/" + encodeURIComponent(dbState.table) + "?" + params.toString());
     let cols = Array.isArray(d.columns) ? d.columns : [];
     const rows = Array.isArray(d.rows) ? d.rows : [];
+    const total = Number(d.total != null ? d.total : rows.length);
     if(!cols.length && rows.length && typeof rows[0] === "object"){
       cols = Object.keys(rows[0]);
     }
     const card = el("div", "result-card");
     const head = el("div", "rc-head");
-    head.append(el("span", "", "🗄️ " + name), el("span", "st mut", rows.length + " 行"));
+    head.append(el("span", "", "🗄️ " + dbState.table),
+      el("span", "st mut", "共 " + total + " 行"));
     card.append(head);
     const back = el("button", "btn ghost", "← 返回表清单");
     back.style.marginBottom = "10px";
@@ -1424,6 +1632,24 @@ async function loadTable(name){
       box.replaceChildren(card);
       return;
     }
+    // 关键词过滤（TEXT 列 LIKE，服务端过滤后 total/分页联动）
+    const bar = el("div", "db-head");
+    const fld = el("div", "fld");
+    fld.append(el("label", "", "关键词"));
+    const input = el("input", "", "");
+    input.placeholder = "TEXT 列包含过滤…";
+    input.value = dbState.q;
+    input.addEventListener("input", () => {
+      clearTimeout(dbFilterTimer);
+      dbFilterTimer = setTimeout(() => {
+        dbState.q = input.value.trim();
+        dbState.page = 1;
+        fetchDbTable();
+      }, 300);
+    });
+    fld.append(input);
+    bar.append(fld);
+    card.append(bar);
     const wrap = el("div", "tbl-wrap");
     const t = el("table", "");
     const thead = el("thead");
@@ -1431,7 +1657,7 @@ async function loadTable(name){
     cols.forEach(c => hr.append(el("th", "", String(c))));
     thead.append(hr);
     const tbody = el("tbody");
-    rows.slice(0, 100).forEach(r => {
+    rows.forEach(r => {
       const tr = el("tr");
       cols.forEach((c, ci) => {
         // 后端 rows 为值数组行（[[v,v,...],...]）→ 按列索引取值；
@@ -1447,14 +1673,25 @@ async function loadTable(name){
     t.append(thead, tbody);
     wrap.append(t);
     card.append(wrap);
-    if(rows.length > 100){
-      card.append(el("div", "empty", "仅显示前 100 行（共 " + rows.length + " 行）。"));
+    if(!rows.length && total > 0){
+      card.append(el("div", "empty", "当前页无数据（可能是过滤后行数少于 offset 起点）。"));
     }
+    card.append(pagerBar({
+      page: dbState.page, pageSize: dbState.pageSize, total,
+      onPage: p => { dbState.page = p; fetchDbTable(); },
+      onSize: s => { dbState.pageSize = s; dbState.page = 1; fetchDbTable(); },
+    }));
     box.replaceChildren(card);
   }catch(err){
     box.replaceChildren(el("div", "empty", "⚠️ 表预览失败：" + err.message));
     toast("表预览失败：" + err.message);
   }
+}
+function loadTable(name){
+  dbState.table = name;
+  dbState.page = 1;
+  dbState.q = "";
+  return fetchDbTable();
 }
 
 /* ══════════════════ 6. Config ══════════════════ */
