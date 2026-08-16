@@ -1,7 +1,6 @@
 # 演示 UI 设计文档（/rag-gen-ai-service-demo）
 
 > 本文档描述演示工作台（`api/static/rag-gen-ai-service-demo.html`）的设计，与实现一一对应。
-> 规格真源为本文档；实现变更须同步本文档（铁律 8：修改必须全局一致）。
 
 ---
 

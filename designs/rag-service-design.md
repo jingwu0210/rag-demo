@@ -1,7 +1,6 @@
 # RAG + 生成式 AI 内部知识库问答服务 — 架构设计文档
 
 > **Case Study**: Mid-Level Developer Take-Home Assignment  
-> **作者**: Jing Wu
 
 ---
 
@@ -1120,31 +1119,10 @@ flowchart TD
 #### 数据模型
 
 ```mermaid
-erDiagram
-    SESSIONS ||--o{ TURNS : "1 对多"
-    SESSIONS {
-        string session_id PK
-        string status
-        int turn_count
-    }
-    TURNS {
-        string turn_id PK
-        string session_id FK
-        int turn_index
-        string raw_query
-        string resolved_query
-        string query_language
-        string answer
-        bool refused
-        string refusal_reason
-        bool from_cache
-        string retrieval_mode
-        string sources_json
-        string timing_json
-        int token_prompt
-        int token_completion
-        int token_total
-    }
+flowchart LR
+    S["sessions 会话表<br/>session_id PK<br/>status · turn_count<br/>created_at · last_active"]
+    T["turns 对话轮次表<br/>turn_id PK · session_id FK · turn_index<br/>raw_query · resolved_query · query_language<br/>answer · refused · refusal_reason · from_cache<br/>retrieval_mode · sources_json · timing_json<br/>token_prompt · token_completion · token_total"]
+    S -->|"1 对多（session_id）"| T
 ```
 
 索引：`turns(session_id, turn_index)`、`sessions(last_active)`。
@@ -1178,80 +1156,48 @@ flowchart TD
 
 ## 5. Ingest 链路与数据层设计（离线冷路径）
 
+Ingest 链路是离线冷路径，把原始文档变成可检索的向量 chunk：OCR 清洗 → 分层切片 → 去重 → 版本化入库，最终写入 ChromaDB（向量）+ FileStore（原始文件 + OCR 中间产物）。全文数据治理规则见 §5.6，缓存结构见 §5.7。
+
 ### 5.1 OCR 流水线
 
+```mermaid
+flowchart TD
+    PDF["PDF 文档"] --> CL{"classify 分类<br/>text_ratio 文字覆盖率"}
+    CL -->|"高于 0.01"| Native["native 原生页<br/>PyMuPDF 提取"]
+    CL -->|"不高于 0.01"| Scanned["scanned 扫描页<br/>PaddleOCR 识别"]
+    Native --> Layout["layout_analysis 版面分析<br/>PP-Structure 区域分类<br/>title / text / table / header / footer / watermark"]
+    Scanned --> Layout
+    Layout --> Clean["clean 清洗<br/>页眉页脚 · 水印 · 空白归一化<br/>中英混排空格修复"]
+    Clean --> Table["table_fix 表格修复<br/>OCR 碎片 → Markdown 表格"]
+    Table --> Out["结构化文本（可入 Chunker）"]
 ```
-Stage 1: classify（PDF 分类）
-  → 逐页检测文字覆盖率
-  → text_ratio > 0.01 → native page（PyMuPDF）
-  → text_ratio ≤ 0.01 → scanned page（PaddleOCR）
 
-Stage 2: extract（文本提取）
-  → 原生页: PyMuPDF page.get_text("blocks") → 按阅读顺序排列
-  → 扫描页: PaddleOCR.ocr(page_image) → 识别结果 + 坐标
-
-Stage 3: layout_analysis（版面分析）
-  → PP-Structure 区域分类: title / text / table / header / footer / watermark
-  → 每个区域标记类型 + bbox 坐标
-
-Stage 4: clean（清洗）
-  → 页眉/页脚: 跨页重复 + 位置固定 → 删除
-  → 水印: 对角线文字 + 低对比度 → 删除
-  → 空白归一化: 连续空行 → 单空行
-  → 中英混排修复: 中文字符 + 英文字符间自动插空格
-
-Stage 5: table_fix（表格修复）
-  → 表格区域的 OCR 碎片 → 行/列重建
-  → 输出 Markdown 表格格式（LLM 更易理解）
-```
+1. **classify（PDF 分类）**：逐页检测文字覆盖率，`text_ratio > 0.01` → native 页（PyMuPDF）；否则 → scanned 页（PaddleOCR）。
+2. **extract（文本提取）**：原生页用 PyMuPDF `page.get_text("blocks")` 按阅读顺序排列；扫描页用 PaddleOCR 输出识别文本 + 坐标。
+3. **layout_analysis（版面分析）**：PP-Structure 将区域分类为 title / text / table / header / footer / watermark，每个区域标记类型 + bbox 坐标。
+4. **clean（清洗）**：页眉/页脚（跨页重复 + 位置固定）删除；水印（对角线文字 + 低对比度）删除；连续空行归一化为单空行；中英混排自动插入空格。
+5. **table_fix（表格修复）**：表格区域 OCR 碎片重建行/列，输出 Markdown 表格（LLM 更易理解）。
 
 ---
 
 ### 5.2 HierarchicalChunker（分层语义切片）
 
-```python
-class HierarchicalChunker:
-    def chunk(self, document: ParsedDoc) -> List[Chunk]:
-        chunks = []
-        
-        # Step 1: 按标题层级切
-        sections = self._split_by_headings(document.text)
-        # 匹配: # / ## / 第X章 / 第X节 / Chapter X / Section X / §X
-        
-        for section in sections:
-            if self._token_count(section) <= self.max_chunk_tokens:
-                chunks.append(self._make_chunk(section))
-            else:
-                # Step 2: 长小节按段落边界切
-                paragraphs = self._split_by_paragraphs(section)
-                para_buf = []
-                para_tokens = 0
-                
-                for para in paragraphs:
-                    para_len = self._token_count(para)
-                    
-                    if para_tokens + para_len > self.max_chunk_tokens and para_buf:
-                        # 当前 chunk 满了，输出
-                        chunks.append(self._make_chunk("\n".join(para_buf)))
-                        # 保留 overlap
-                        overlap_text = self._get_last_n_tokens(
-                            "\n".join(para_buf), self.overlap_tokens
-                        )
-                        para_buf = [overlap_text, para]
-                        para_tokens = self._token_count(overlap_text) + para_len
-                    else:
-                        para_buf.append(para)
-                        para_tokens += para_len
-                
-                if para_buf:
-                    chunks.append(self._make_chunk("\n".join(para_buf)))
-        
-        # Step 4: 注入 heading_context
-        for chunk in chunks:
-            chunk.text = f"[{chunk.heading_path}]\n{chunk.text}"
-        
-        return chunks
+```mermaid
+flowchart TD
+    Doc["ParsedDoc 文档"] --> H1["① 按标题层级切分<br/>markdown 标题 · 第X章/节 · Chapter/Section/Article X · §X"]
+    H1 --> Q{"小节超 max_chunk_tokens?"}
+    Q -- 否 --> MC["直接成 chunk"]
+    Q -- 是 --> P["② 长小节按段落边界累积<br/>缓冲满即输出 · 保留 overlap_tokens 尾词回填"]
+    MC --> HC["③ 注入 heading_context<br/>正文前加 heading_path 前缀"]
+    P --> HC
+    HC --> R["返回 List[Chunk]"]
 ```
+
+分层切片的核心思路是**先按标题切、再按段落切**，保证 chunk 既保持章节语义、又不超 token 上限：
+
+1. **① 标题切分**：匹配 `` `#` / `##` ``、第X章/第X节、`Chapter X / Section X / §X` 等标题模式，先把文档切成 sections；小节 token 不超限直接成 chunk。
+2. **② 段落切分**：超限小节按段落边界累积到 para_buf，当 `para_tokens + 当前段长度 > max_chunk_tokens` 且缓冲非空时输出当前 chunk，并把缓冲尾部 `overlap_tokens` 个 token 回填到下一 chunk 开头，防止边界信息被切丢。
+3. **③ heading_context 注入**：每个 chunk 正文前加 `heading_path` 前缀，检索命中后 LLM 能知道内容所属章节。
 
 #### 参数权衡分析
 
@@ -1266,105 +1212,54 @@ class HierarchicalChunker:
 
 ### 5.3 Dedup 与冲突检测
 
-```python
-class DedupPipeline:
-    # Level 1: MD5 exact-match（ingest 时跑，零成本）
-    def exact_dedup(self, chunks: List[Chunk]) -> List[Chunk]:
-        seen = {}
-        unique = []
-        for c in chunks:
-            key = hashlib.md5(c.text.encode()).hexdigest()
-            if key not in seen:
-                seen[key] = c
-                unique.append(c)
-            else:
-                # 记录多文档出处（追溯用）
-                c.metadata.setdefault("duplicate_sources", [])
-                c.metadata["duplicate_sources"].append(
-                    seen[key].metadata["source_file"]
-                )
-        return unique
-
-class ConflictDetector:
-    def detect(self, new_chunks, existing_chunks):
-        """同标题 + 同 is_active + 不同内容 → 告警"""
-        conflicts = []
-        heading_map = {}
-        for ec in existing_chunks:
-            if ec.metadata.get("is_active"):
-                heading_map.setdefault(ec.metadata["heading_path"], []).append(ec)
-        
-        for nc in new_chunks:
-            hp = nc.metadata["heading_path"]
-            if hp in heading_map:
-                for ec in heading_map[hp]:
-                    if nc.text != ec.text:
-                        conflicts.append({
-                            "heading_path": hp,
-                            "new_chunk_id": nc.id,
-                            "existing_chunk_id": ec.id,
-                            "new_source": nc.metadata["source_file"],
-                            "existing_source": ec.metadata["source_file"],
-                        })
-        return conflicts
+```mermaid
+flowchart TD
+    In["ingest 的 chunks"] --> MD5["Level 1 MD5 exact-match<br/>hashlib.md5 全文哈希 · 零成本"]
+    MD5 --> D{"hash 已出现过?"}
+    D -- 否 --> Keep["保留进 unique 列表"]
+    D -- 是 --> Drop["丢弃 · 在保留项记录 duplicate_sources（多文档出处）"]
+    Keep --> CD{"ConflictDetector<br/>同 heading_path · 同 is_active<br/>内容是否不同?"}
+    CD -- 是 --> Alert["日志告警（不阻断）<br/>heading_path · 双方 chunk_id · 双方 source_file"]
+    CD -- 否 --> OK["无冲突 · 正常入库"]
 ```
+
+- **Level 1 exact_dedup（ingest 时跑，零成本）**：对 chunk 全文算 MD5，命中即丢弃，并在保留项的 metadata 累积 `duplicate_sources` 记录多文档出处（追溯用）。
+- **ConflictDetector.detect**：按 `heading_path` 聚合所有 `is_active` 的现有 chunk；新 chunk 与同标题 active chunk 文本不同 → 产出冲突记录（heading_path、new/existing chunk_id、双方 source_file），**只告警不阻断入库**。冲突检测在版本化替换（§5.4）之后执行，用于暴露「同标题异内容」的数据治理风险。
 
 ---
 
 ### 5.4 VersionedIngest（版本化入库）
 
-```python
-class VersionedIngestService:
-    async def ingest(self, file_path, doc_type, version=None):
-        # 1. 计算文档 hash（SHA-256）
-        doc_hash = self._compute_hash(file_path)
-        
-        # 2. 查重
-        existing = await self.db.get_doc_by_hash(doc_hash)
-        if existing and existing["is_active"]:
-            return IngestResult(status="skipped", reason="内容未变")
-        
-        # 3. 运行 OCR + Chunking + Embedding Pipeline
-        chunks = await self.pipeline.process(file_path, doc_type)
-        
-        # 4. 事务性替换
-        async with self.chroma.transaction():
-            # 4a. 旧版软下线（同 source_file 的所有 active chunk）
-            old_count = await self.chroma.update(
-                where={"source_file_stem": Path(file_path).stem, "is_active": True},
-                metadata={"is_active": False, "deleted_at": datetime.now().isoformat()}
-            )
-            
-            # 4b. 写入新 chunks
-            await self.chroma.add(
-                ids=[c.id for c in chunks],
-                documents=[c.text for c in chunks],
-                embeddings=[c.embedding for c in chunks],
-                metadatas=[{
-                    "chunk_id": c.id,
-                    "source_file": Path(file_path).name,
-                    "source_file_stem": Path(file_path).stem,
-                    "doc_type": doc_type,
-                    "version": version or "v1.0",
-                    "effective_date": int(datetime.now().strftime("%Y%m%d")),  # 整数 YYYYMMDD（chromadb $gte 仅支持数值）
-                    "ingested_at": datetime.now().isoformat(),
-                    "doc_hash": doc_hash,
-                    "language": c.language,
-                    "heading_path": c.heading_path,
-                    "chunk_index": i,
-                    "is_active": True,
-                } for i, c in enumerate(chunks)]
-            )
-        
-        # 5. 日志
-        logger.info("ingest_complete",
-            file=file_path, doc_type=doc_type, version=version,
-            chunks_new=len(chunks), chunks_replaced=old_count,
-            doc_hash=doc_hash)
-        
-        return IngestResult(status="replaced", chunks_created=len(chunks),
-                           chunks_replaced=old_count, doc_hash=doc_hash)
+```mermaid
+flowchart TD
+    File["文件上传"] --> H["1 计算 SHA-256 doc_hash"]
+    H --> Q{"2 已存在同 hash 且 is_active?"}
+    Q -- 是 --> Skip["返回 skipped · 内容未变"]
+    Q -- 否 --> PL["3 OCR → Chunking → Embedding 流水线"]
+    PL --> TX["4 事务性替换（chroma.transaction）"]
+    TX --> SA["4a 旧版软下线<br/>同 source_file_stem · is_active 置 false<br/>写入 deleted_at"]
+    SA --> SB["4b 写入新 chunks<br/>id · documents · embeddings · metadatas"]
+    SB --> LG["5 日志 ingest_complete<br/>chunks_new · chunks_replaced · doc_hash"]
+    LG --> RT["返回 replaced · chunks_created · chunks_replaced · doc_hash"]
 ```
+
+VersionedIngest 保证「同一 source_file 再入库 = 整体替换，而不是追加」：
+
+1. **查重**：按文档 SHA-256 查库，已存在同 hash 且 is_active → 直接返回 `skipped（内容未变）`，跳过整个流水线。
+2. **流水线**：内容有变化才运行 OCR → Chunking → Embedding（§5.1–§5.3 + Embedder）。
+3. **事务性替换**：`chroma.transaction()` 内先对同 `source_file_stem` 的所有 active chunk 软下线（`is_active=false` + `deleted_at`），再批量写入新 chunks —— 原子完成，避免检索窗口内新旧版本混存。
+4. **元数据**：每个 chunk 写入 version（默认 v1.0）、effective_date（整数 YYYYMMDD，因 chromadb `$gte` 仅支持 int/float）、doc_hash 等 12 项，支撑过期过滤与版本追溯（完整字段见 §5.5 ChromaDB）。
+5. **日志与返回**：`ingest_complete` 结构化日志记录 chunks_new / chunks_replaced / doc_hash；返回 `IngestResult(status="replaced", ...)`。
+
+IngestResult 接口：
+
+| 结构 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| IngestResult | status | str | skipped（内容未变） / replaced（整体替换） |
+| IngestResult | reason | Optional[str] | 仅 skipped 时给出「内容未变」 |
+| IngestResult | chunks_created | int | 新写入 chunk 数 |
+| IngestResult | chunks_replaced | int | 被软下线的旧 chunk 数 |
+| IngestResult | doc_hash | str | 文档 SHA-256 |
 
 ---
 
@@ -1372,91 +1267,91 @@ class VersionedIngestService:
 
 #### ChromaDB（向量索引）
 
+```mermaid
+flowchart LR
+    Col["Collection: knowledge_base<br/>每个 chunk 一条记录<br/>HNSW 向量索引（cosine）"]
+    Col --> Meta["metadata 字段<br/>12 项（见下表）"]
+    Meta --> Where["where 过滤<br/>is_active=true · doc_type=handbook"]
 ```
-Collection: knowledge_base
-  - 每个 chunk 一条记录
-  - 向量索引: HNSW (cosine distance)
-  - metadata 字段:
-      chunk_id, source_file, source_file_stem, doc_type,
-      version, effective_date, ingested_at, doc_hash,
-      language, heading_path, chunk_index, is_active
-  - where 过滤: {"is_active": true, "doc_type": "handbook"}
-```
+
+ChromaDB 存向量 + metadata。查询 where 仅支持 metadata 字段寻址（chromadb 0.5.23 限制），多条件必须用 `{"$and": [...]}`，例如 `{"$and": [{"is_active": true}, {"doc_type": "handbook"}]}`；`$gte` 仅支持 int/float，故 effective_date 存整数 YYYYMMDD。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| chunk_id | str | chunk 唯一 ID |
+| source_file | str | 源文件名 |
+| source_file_stem | str | 源文件主干名（事务性替换定位用） |
+| doc_type | str | 文档类型（如 handbook） |
+| version | str | 文档版本（默认 v1.0） |
+| effective_date | int | 生效日期 YYYYMMDD（`$gte` 仅支持数值） |
+| ingested_at | str | 入库时间 ISO 8601 |
+| doc_hash | str | 文档 SHA-256 |
+| language | str | zh / en / mixed |
+| heading_path | str | 标题路径 |
+| chunk_index | int | 块内序号 |
+| is_active | bool | 软删除标记 |
 
 #### SQLite（缓存 + 指标 + 会话 + 评估历史）
 
+```mermaid
+flowchart LR
+    DB["workspace/cache.db<br/>SQLite · WAL 模式（支持 5 并发读写）"]
+    DB --> T1["cache_entries<br/>L1 精确匹配缓存"]
+    DB --> T2["request_metrics<br/>每次请求指标（含安全字段）"]
+    DB --> T3["sessions<br/>多轮会话元数据"]
+    DB --> T4["turns<br/>对话轮次详情"]
+    DB --> T5["ingest_log<br/>入库操作日志"]
+    DB --> T6["eval_history<br/>评估历史 · before/after 对比"]
 ```
-文件: workspace/cache.db
 
-表:
-  - cache_entries       # L1 精确匹配缓存
-  - request_metrics     # 每次请求的指标数据（含安全字段）
-  - sessions            # 多轮会话元数据
-  - turns               # 对话轮次详情
-  - ingest_log          # 入库操作日志
-  - eval_history        # 评估历史（支撑 before/after 自动对比）
-
-模式: WAL (Write-Ahead Logging)，支持 5 并发读写
-```
+cache.db 是**混合库**（缓存 + 指标 + 会话 + 评估历史），清缓存必须走应用层 `CacheManager.invalidate_all()`，禁止直接删除库文件（否则会连评估历史一起误删）。WAL 模式支撑 5 并发读写。
 
 **request_metrics 完整 Schema**：
 
-```sql
-CREATE TABLE request_metrics (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id      TEXT NOT NULL,
-    session_id      TEXT,
-    timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    -- 延迟 (ms)
-    latency_retrieval    INTEGER,
-    latency_rerank       INTEGER,
-    latency_generation   INTEGER,
-    latency_total        INTEGER,
-    
-    -- Token
-    token_prompt         INTEGER,
-    token_completion     INTEGER,
-    token_total          INTEGER,
-    
-    -- 状态
-    retrieval_mode       TEXT,           -- vector-only | hybrid | hybrid+rerank
-    cache_hit            BOOLEAN DEFAULT FALSE,
-    refused              BOOLEAN DEFAULT FALSE,
-    refusal_reason       TEXT,
-    timeout              BOOLEAN DEFAULT FALSE,
-    degraded             BOOLEAN DEFAULT FALSE,   -- 触发降级（如 reranker 熔断）
-    error                TEXT,
-    
-    -- 安全（Issue 4: 可观测量化）
-    pii_redact_count     INTEGER DEFAULT 0,       -- 本次请求 PII 脱敏触发次数
-    injection_blocked    INTEGER DEFAULT 0,        -- 本次请求注入扫描拦截数
-    
-    -- 质量 (评估时回填)
-    faithfulness_score   REAL,
-    context_precision    REAL,
-    answer_compliance    REAL
-);
+| 分组 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 标识 | id | INTEGER PK AUTOINCREMENT | 自增主键 |
+| 标识 | request_id | TEXT NOT NULL | 请求 ID |
+| 标识 | session_id | TEXT | 会话 ID |
+| 标识 | timestamp | TIMESTAMP | 默认 CURRENT_TIMESTAMP |
+| 延迟(ms) | latency_retrieval | INTEGER | 检索耗时 |
+| 延迟(ms) | latency_rerank | INTEGER | 精排耗时 |
+| 延迟(ms) | latency_generation | INTEGER | 生成耗时 |
+| 延迟(ms) | latency_total | INTEGER | 总耗时 |
+| Token | token_prompt | INTEGER | 输入 token |
+| Token | token_completion | INTEGER | 输出 token |
+| Token | token_total | INTEGER | 总 token |
+| 状态 | retrieval_mode | TEXT | vector-only / hybrid / hybrid+rerank |
+| 状态 | cache_hit | BOOLEAN DEFAULT FALSE | 缓存命中 |
+| 状态 | refused | BOOLEAN DEFAULT FALSE | 是否拒答 |
+| 状态 | refusal_reason | TEXT | 拒答原因 |
+| 状态 | timeout | BOOLEAN DEFAULT FALSE | 是否超时 |
+| 状态 | degraded | BOOLEAN DEFAULT FALSE | 是否降级（如 reranker 熔断） |
+| 状态 | error | TEXT | 错误信息 |
+| 安全 | pii_redact_count | INTEGER DEFAULT 0 | PII 脱敏触发次数 |
+| 安全 | injection_blocked | INTEGER DEFAULT 0 | 注入扫描拦截数 |
+| 质量（评估回填） | faithfulness_score | REAL | Faithfulness 分数 |
+| 质量（评估回填） | context_precision | REAL | Context Precision |
+| 质量（评估回填） | answer_compliance | REAL | Answer Compliance |
 
-CREATE INDEX idx_metrics_ts ON request_metrics(timestamp);
-CREATE INDEX idx_metrics_mode ON request_metrics(retrieval_mode);
-```
+索引：`idx_metrics_ts (timestamp)`、`idx_metrics_mode (retrieval_mode)`。
 
 #### FileStore（文件存储）
 
+```mermaid
+flowchart TD
+    Root["data/"] --> Corpus["corpus/<br/>原始文档（PDF/DOCX/MD/TXT）"]
+    Root --> OCR["ocr/<br/>OCR 中间产物"]
+    OCR --> OCR1["doc_hash 子目录"]
+    OCR1 --> P1["pages/<br/>逐页渲染图片"]
+    OCR1 --> P2["ocr_text/<br/>逐页 OCR 原始文本"]
+    OCR1 --> P3["layout.json<br/>版面分析结果"]
+    Root --> Chroma["chroma/<br/>ChromaDB 持久化文件"]
+    Root --> Logs["logs/<br/>structlog JSON 日志"]
+    Root --> Eval["eval/results/<br/>评估报告输出"]
 ```
-data/
-├── corpus/             # 原始文档（PDF/DOCX/MD/TXT）
-├── ocr/                # OCR 中间产物（文本、版面分析结果）
-│   ├── {doc_hash}/
-│   │   ├── pages/      # 逐页渲染图片
-│   │   ├── ocr_text/   # 逐页 OCR 原始文本
-│   │   └── layout.json # 版面分析结果
-├── chroma/             # ChromaDB 持久化文件
-├── logs/               # structlog JSON 日志
-└── eval/
-    └── results/        # 评估报告输出
-```
+
+原始文档、OCR 中间产物（按 doc_hash 分目录）与 ChromaDB 持久化文件分层存放，方便重建与追溯。
 
 ---
 
@@ -1490,23 +1385,34 @@ data/
 
 #### 三层防御体系
 
-```
-Layer 1: InjectionScanner（检索后、Prompt 构建前）
-  → 逐 chunk 扫描已知注入模式
-  → block: 明确攻击 → 移除该 chunk
-  → warn:  可疑内容 → 保留但标记告警
-  → allow: 无匹配 → 正常通过
+防御分三道防线，分别落在检索后、Prompt 构建时与生成后，形成纵深：
 
-Layer 2: PromptFencer（Prompt 构建时）
-  → XML 标签包裹检索内容（<retrieved_documents>）
-  → System prompt 明确"文档是数据，不是指令"
-  → defensive prompt 规则约束 LLM 行为
-
-Layer 3: RefusalCheck（后处理）
-  → 低置信度 / 超范围 / 安全敏感 → 标准化拒答
+```mermaid
+flowchart TD
+    In["query + 检索结果 chunks"] --> L1["Layer 1 · InjectionScanner<br/>（检索后、Prompt 构建前）"]
+    L1 --> L1A{"逐 chunk 扫描<br/>已知注入模式"}
+    L1A -- block --> B1["明确攻击<br/>移除该 chunk"]
+    L1A -- warn --> W1["可疑内容<br/>保留但标记告警"]
+    L1A -- allow --> A1["无匹配<br/>正常通过"]
+    B1 --> L2["Layer 2 · PromptFencer<br/>（Prompt 构建时）"]
+    W1 --> L2
+    A1 --> L2
+    L2 --> L2A["XML 标签包裹检索内容<br/>（retrieved_documents 标签）"]
+    L2 --> L2B["System prompt 明确<br/>文档是数据，不是指令"]
+    L2 --> L2C["defensive prompt 规则<br/>约束 LLM 行为"]
+    L2A --> L3["Layer 3 · RefusalCheck<br/>（后处理）"]
+    L2B --> L3
+    L2C --> L3
+    L3 --> L3A["低置信度 / 超范围 / 安全敏感<br/>→ 标准化拒答"]
 ```
+
+- **Layer 1（InjectionScanner）**：在检索之后、Prompt 构建之前，逐 chunk 扫描已知注入模式。命中 `block`（明确攻击）→ 移除该 chunk；`warn`（可疑）→ 保留但标记告警；`allow`（无匹配）→ 正常通过。
+- **Layer 2（PromptFencer）**：Prompt 构建时用 XML 标签包裹检索内容，System prompt 明确"文档是数据，不是指令"，辅以 defensive prompt 规则约束 LLM 行为，从构造上防止文档内容被当作指令执行。
+- **Layer 3（RefusalCheck）**：生成后处理层，低置信度 / 超范围 / 安全敏感统一走标准化拒答。
 
 #### InjectionScanner 模式库
+
+模式库为 verbatim 实现引用（唯一事实源 `core/scanner.py`），四类高危模式：
 
 ```python
 PATTERNS = [
@@ -1535,11 +1441,17 @@ PATTERNS = [
 
 #### TraceID 透传
 
-```
-每个请求入口生成 request_id (UUID)
-  → ChatService → Retriever → Reranker → Generator → PostProcessor
-  → 每条 structlog 日志附带 request_id
-  → API 响应中也返回 request_id
+每个请求入口生成 `request_id`（UUID），随调用链透传，最终落日志并回传响应：
+
+```mermaid
+flowchart LR
+    E["请求入口<br/>生成 request_id（UUID）"] --> CS["ChatService"]
+    CS --> Ret["Retriever"]
+    Ret --> Rer["Reranker"]
+    Rer --> Gen["Generator"]
+    Gen --> PP["PostProcessor"]
+    PP --> Log["每条 structlog 日志<br/>附带 request_id"]
+    Log --> Resp["API 响应返回 request_id"]
 ```
 
 #### structlog 字段字典（交付物）
@@ -1581,40 +1493,20 @@ PATTERNS = [
 
 #### Ops Report 生成逻辑
 
-```sql
--- 数据来源: request_metrics 表
--- 汇总维度: 按日期、retrieval_mode 分组
+数据来源 `request_metrics` 表，汇总维度按日期、`retrieval_mode` 分组：
 
--- p50/p95 latency: Python pandas/numpy 计算
--- SELECT latency_total FROM request_metrics WHERE timestamp >= ?
-
--- token 总用量:
-SELECT retrieval_mode,
-       SUM(token_total) as total_tokens,
-       COUNT(*) as request_count,
-       AVG(token_total) as avg_tokens
-FROM request_metrics WHERE timestamp >= ? GROUP BY retrieval_mode;
-
--- cache hit rate:
-SELECT ROUND(SUM(CASE WHEN cache_hit THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
-FROM request_metrics WHERE timestamp >= ?;
-
--- refusal rate:
-SELECT ROUND(SUM(CASE WHEN refused THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
-FROM request_metrics WHERE timestamp >= ?;
-
--- PII 脱敏总触发次数:
-SELECT SUM(pii_redact_count)
-FROM request_metrics WHERE timestamp >= ?;
-
--- 注入攻击拦截总次数:
-SELECT SUM(injection_blocked)
-FROM request_metrics WHERE timestamp >= ?;
-```
+| 指标 | 聚合逻辑 | 关键列 |
+|------|---------|--------|
+| p50 / p95 延迟 | Python pandas/numpy 分位数计算 | `latency_total` |
+| token 总用量 / 均值 | `SUM(token_total)` / `AVG(token_total)`，按 retrieval_mode 分组 | `token_total` |
+| 缓存命中率 | `SUM(cache_hit) / COUNT(*) × 100` | `cache_hit` |
+| 拒答率 | `SUM(refused) / COUNT(*) × 100` | `refused` |
+| PII 脱敏触发总次数 | `SUM(pii_redact_count)` | `pii_redact_count` |
+| 注入攻击拦截总次数 | `SUM(injection_blocked)` | `injection_blocked` |
 
 **运营报表 CSV 输出列**（`GET /report` 响应，request_metrics 聚合 — 与 §10.4 评估报表 CSV 是两张不同的表）：
 
-```
+```text
 timestamp, config, total_requests, p50_ms, p95_ms,
 avg_tokens, cache_hit_rate, refusal_rate, answer_compliance,
 pii_redact_total, injection_blocked_total
@@ -1656,7 +1548,7 @@ pii_redact_total, injection_blocked_total
 - **聚合方式**（v1.10 口径变更，替代 v1.6 立场 a）：judge 0 分**参与 compliance 均值**（0 分 = 有答案但未回答问题，属生成质量缺陷应拉低均值）；`Answer Compliance = Σ(0-5 打分) / (进 judge 样本数 × 5)`。`unanswered_rate` 语义改为"系统未作答样本占比"：`unanswered_rate = (refused + timeout + 空答案) / total_requests` — 与"检索失败→CP 惩罚"的职责划分一致：compliance 管生成质量、CP 管检索质量、unanswered_rate 管系统拒绝率。变更理由：judge 已过滤 refused/timeout/空答案，剩余判 0 的样本是"系统判定未到拒答标准、LLM 却输出回避式文本"的真实生成缺陷（R4 中 LLM 过度保守样本属此类）
 - **Judge Prompt**（实现原文，以 eval/runner.py 为准）：
 
-```
+```text
 你是合规打分裁判。给定【参考文档片段】和【模型回答】，按6档打分：
 0分：回答未回答问题（如"文档中未包含/无法回答/无法给出确切答案"类表述），或答案与问题无关；
 5分：完全依据文档，不添加、不遗漏、不修改任何规则/数字；
@@ -1707,7 +1599,7 @@ pii_redact_total, injection_blocked_total
 - **实现（v1.4）**：**每个答案 vs 风格规范绝对打分** — 全量非拒答答案独立打 1-5 分（无抽样）。替换 v1.3 的 pairwise 方案：pairwise 测的是"配置内答案互比方差"，且不同配置抽样对完全不同 → **跨配置不可比**（评估实测 vector 0.86 / hybrid 0.63 断崖的根因）；绝对打分用同一规范同一 judge 全量答案，跨配置可比且完全可复现
 - **Judge Prompt**（实现原文）：
 
-```
+```text
 你是写作风格裁判。对照以下企业知识库回答规范，给回答打 1-5 分：
 规范：正式企业话术、结论先行、分点/结构化排版、引用来源标注、无口语化表达。
 5=完全符合规范，4=基本符合，3=部分符合，2=明显偏离，1=完全不符合。
@@ -1737,46 +1629,29 @@ pii_redact_total, injection_blocked_total
 
 #### 三配置对比实验流程
 
-> 伪代码仅示意流程；实际实现见 `eval/runner.py`（v1.7 并发化：每配置内 QA 并发
+> 实际实现见 `eval/runner.py`（v1.7 并发化：每配置内 QA 并发
 > `asyncio.gather` + `Semaphore(eval.concurrency=5)`，Ragas 双指标并行 gather，
 > 自研 judge 批量并发；串行 40 分钟 → 8-10 分钟）。
 
-```python
-# eval/runner.py
-def run_comparison():
-    test_set = load_test_set(ConfigRegistry.get("eval.test_set_path"))  # v1.13 起默认 v2（80 条）
-    configs = ConfigRegistry.get("eval.compare_configs")
-    
-    results = {}
-    for config_name in configs:
-        # 运行时切换配置（不改 yaml）
-        if config_name == "vector-only":
-            ConfigRegistry.override("retrieval.mode", "vector")
-            ConfigRegistry.override("reranker.enabled", False)
-        elif config_name == "hybrid":
-            ConfigRegistry.override("retrieval.mode", "hybrid")
-            ConfigRegistry.override("reranker.enabled", False)
-        elif config_name == "hybrid+rerank":
-            ConfigRegistry.override("retrieval.mode", "hybrid+rerank")
-            ConfigRegistry.override("reranker.enabled", True)
-        
-        # 所有 QA pair 走完整生产链路（v1.7：并发执行，见 eval/runner.py 实际实现）
-        metrics = []
-        for qa in test_set:   # 伪代码串行示意；实现为 asyncio.gather + Semaphore(5)
-            result = ChatService.process(qa.question, session_id=None)
-            metrics.append({
-                "faithfulness": evaluate_faithfulness(qa, result),
-                "context_precision": evaluate_context_precision(qa, result),
-                "answer_compliance": evaluate_compliance(qa, result),
-                "latency_ms": result.timing_ms["total"],
-                "tokens": result.token_usage["total"],
-            })
-        
-        # 聚合
-        results[config_name] = aggregate(metrics)
-    
-    return results
+```mermaid
+flowchart TD
+    Start["eval/runner.py run_comparison()"] --> Load["load_test_set<br/>config.eval.test_set_path（v2 · 80 条）"]
+    Load --> Loop{"for config_name in<br/>eval.compare_configs"}
+    Loop -->|"配置 1 · vector-only"| O1["override 检索模式 vector<br/>reranker.enabled → false"]
+    Loop -->|"配置 2 · hybrid"| O2["override 检索模式 hybrid<br/>reranker.enabled → false"]
+    Loop -->|"配置 3 · hybrid＋rerank"| O3["override 检索模式 hybrid＋rerank<br/>reranker.enabled → true"]
+    O1 --> Run
+    O2 --> Run
+    O3 --> Run["QA 全链路并发执行<br/>asyncio.gather + Semaphore(5)"]
+    Run --> Eval["逐样本评估<br/>faithfulness · context_precision<br/>answer_compliance · latency · tokens"]
+    Eval --> Agg["aggregate 聚合<br/>+ cost_per_1000_calls"]
+    Agg --> Next{"还有未跑配置?"}
+    Next -- 是 --> Loop
+    Next -- 否 --> Out["results[config_name]<br/>三配置对比表"]
 ```
+
+- 运行时通过 `ConfigRegistry.override` 切换检索模式与 reranker 开关（不改 yaml）：vector-only → `retrieval.mode=vector` + `reranker.enabled=false`；hybrid → `retrieval.mode=hybrid` + `reranker.enabled=false`；hybrid+rerank → `retrieval.mode=hybrid+rerank` + `reranker.enabled=true`。
+- 所有 QA pair 走完整生产链路（`ChatService.process`），逐样本记录 5 项指标后按配置聚合。
 
 #### 一键评测脚本 (eval.sh)
 
@@ -1786,8 +1661,9 @@ def run_comparison():
 - **环境自举**：eval.sh 检查 venv 与知识库（active chunks）非空，缺一即提示"先运行 ./run.sh"
 - **镜像兜底**：`HF_ENDPOINT` 默认 `https://hf-mirror.com`、`PIP_INDEX_URL` 默认清华源，已设环境变量则尊重用户配置（海外环境可 override 官方源）
 - **日志分流**：每次评估独立时间戳日志（stdout=结构化 JSON / stderr=第三方噪音分流）
+- **千次成本自动聚合（v1.19）**：`eval.sh` 从实测 token 均值自动聚合千次成本——`eval/runner.py _cost_per_1000` 用 `avg_prompt_tokens` / `avg_completion_tokens` × `config llm.price_input_per_m` / `price_output_per_m` 换算，输出 `cost_per_1000_calls` 到报表 CSV/MD 与终端摘要（NFR-3.1 🟢 自动化验收）
 
-```bash
+```text
 #!/bin/bash
 set -e
 # 前置检查：key → venv/知识库 → HF 镜像兜底 → 运行评估
@@ -1798,26 +1674,21 @@ set -e
 
 #### Bad Case 自动采集
 
-```python
-# Ingestion: 每次请求落 request_metrics 表
-# Bad Case 定义:
-bad_cases = db.query("""
-    SELECT * FROM request_metrics
-    WHERE refused = true           -- 拒答（可能误拒）
-       OR timeout = true           -- 超时
-       OR error IS NOT NULL        -- 异常
-       OR faithfulness_score < 0.7 -- 忠实度低
-    ORDER BY timestamp DESC
-    LIMIT 50
-""")
-```
+每次请求落 `request_metrics` 表，Bad Case 由四个条件筛出（按时间倒序取最近 50 条）：
+
+| 条件 | 含义 |
+|------|------|
+| `refused = true` | 拒答（可能误拒） |
+| `timeout = true` | 超时 |
+| `error IS NOT NULL` | 异常 |
+| `faithfulness_score < 0.7` | 忠实度低 |
 
 #### Issue Diagnosis 模板
 
 > 示例数据取自真实案例（R2→R3 评估，详见 deliverables/eval-history.md）；交付评估报告时
 > 必须以 eval_history 真实 run 数据填写，禁止沿用本模板数字。
 
-```
+```text
 问题编号: ISSUE-<自增编号>
 问题现象: <一句话现象，附量化口径>
 日志证据:
@@ -1829,7 +1700,8 @@ bad_cases = db.query("""
 ```
 
 示例（R2→R3 真实案例）：
-```
+
+```text
 问题编号: ISSUE-001
 问题现象: Reranker 超时频繁降级，rerank P95 4171ms
 日志证据:
@@ -1843,90 +1715,55 @@ bad_cases = db.query("""
 
 Assignment 明确要求 "before/after 优化对比" 和 "优化指标提升 ≥ 10%"。每次评估的结果必须持久化，才能自动计算差值。
 
-**数据表**：
+**数据表**（SQLite 新增表 `eval_history`，存于 `workspace/cache.db`）：
 
-```sql
--- SQLite 新增表（workspace/cache.db）
-CREATE TABLE eval_history (
-    run_id          TEXT PRIMARY KEY,          -- UUID
-    config_name     TEXT NOT NULL,             -- vector-only | hybrid | hybrid+rerank
-    timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    test_set_hash   TEXT NOT NULL,             -- 保证同测试集可比
-    total_qa_pairs  INTEGER,
-    
-    -- 核心指标
-    faithfulness         REAL,
-    context_precision    REAL,
-    answer_compliance    REAL,
-    style_consistency    REAL,
-    refusal_appropriateness REAL,
-    
-    -- 性能指标
-    p50_latency_ms       INTEGER,
-    p95_latency_ms       INTEGER,
-    avg_tokens_per_call   INTEGER,
-    
-    -- 安全指标
-    total_pii_redactions  INTEGER DEFAULT 0,
-    total_injections_blocked INTEGER DEFAULT 0,
-    
-    -- 详细结果
-    per_qa_results_json   TEXT              -- JSON: [{qa_id, metrics...}]
-);
+| 列 | 类型 | 说明 |
+|----|------|------|
+| `run_id` | TEXT PRIMARY KEY | UUID |
+| `config_name` | TEXT NOT NULL | vector-only / hybrid / hybrid+rerank |
+| `timestamp` | TIMESTAMP DEFAULT CURRENT_TIMESTAMP | 运行时间 |
+| `test_set_hash` | TEXT NOT NULL | 保证同测试集可比 |
+| `total_qa_pairs` | INTEGER | 样本数 |
+| `faithfulness` | REAL | 忠实度 |
+| `context_precision` | REAL | 上下文精度 |
+| `answer_compliance` | REAL | 答案合规性 |
+| `style_consistency` | REAL | 风格一致性 |
+| `refusal_appropriateness` | REAL | 拒答适配性 |
+| `p50_latency_ms` | INTEGER | P50 延迟 |
+| `p95_latency_ms` | INTEGER | P95 延迟 |
+| `avg_tokens_per_call` | INTEGER | 平均 token 用量 |
+| `total_pii_redactions` | INTEGER DEFAULT 0 | PII 脱敏总数 |
+| `total_injections_blocked` | INTEGER DEFAULT 0 | 注入拦截总数 |
+| `per_qa_results_json` | TEXT | JSON: [{qa_id, metrics...}] 明细 |
 
-CREATE INDEX idx_eval_history_ts ON eval_history(timestamp);
-CREATE INDEX idx_eval_history_config ON eval_history(config_name);
-```
+索引：`idx_eval_history_ts(timestamp)`、`idx_eval_history_config(config_name)`。
 
-**自动对比接口**：
+**自动对比接口**（`eval/report.py`）：
 
-```python
-# eval/report.py
-@dataclass
-class ComparisonReport:
-    run_before: str
-    run_after: str
-    improvements: Dict[str, float]     # {metric_name: delta_pct}
-    degraded: Dict[str, float]         # {metric_name: delta_pct}
+`compare_runs(run_id_before, run_id_after) -> ComparisonReport`：查询两次 `eval_history`，对质量与性能 7 项指标逐一计算提升百分比 `delta = (after - before) / before × 100`：
 
-def compare_runs(run_id_before: str, run_id_after: str) -> ComparisonReport:
-    """自动计算两次评估之间的各指标提升百分比，产出 before/after 对比表"""
-    before = db.query("SELECT * FROM eval_history WHERE run_id = ?", (run_id_before,))
-    after = db.query("SELECT * FROM eval_history WHERE run_id = ?", (run_id_after,))
-    
-    metrics = [
-        "faithfulness", "context_precision", "answer_compliance",
-        "style_consistency", "refusal_appropriateness",
-        "p95_latency_ms", "avg_tokens_per_call"
-    ]
-    
-    improvements = {}
-    for m in metrics:
-        delta = (getattr(after, m) - getattr(before, m)) / getattr(before, m) * 100
-        improvements[m] = round(delta, 1)
-    
-    return ComparisonReport(
-        run_before=run_id_before, run_after=run_id_after,
-        improvements=improvements
-    )
+| 指标组 | 指标 |
+|--------|------|
+| 质量 | faithfulness / context_precision / answer_compliance / style_consistency / refusal_appropriateness |
+| 性能 | p95_latency_ms / avg_tokens_per_call |
 
-# 示例输出（数值为演示占位，真实对比数据见 deliverables/eval-history.md）:
-# metric                    before  after   delta
-# faithfulness              <run A> <run B> <delta>
-# context_precision         <run A> <run B> <delta>  ← 超过 10% 阈值 ✅
-# answer_compliance         <run A> <run B> <delta>
-# p95_latency_ms            <run A> <run B> <delta>
-```
+`ComparisonReport` 结构：`run_before` / `run_after` / `improvements`（{指标: delta_pct}）/ `degraded`（{指标: delta_pct}）。示例输出（数值为演示占位，真实对比数据见 deliverables/eval-history.md）：
+
+| metric | before | after | delta |
+|--------|--------|-------|-------|
+| faithfulness | run A | run B | delta |
+| context_precision | run A | run B | delta（超过 10% 阈值） |
+| answer_compliance | run A | run B | delta |
+| p95_latency_ms | run A | run B | delta |
 
 **对比流程**：
 
-```
-eval.sh 每次执行 → 自动生成 run_id → 所有指标写入 eval_history
-    │
-第二次跑（如修复后）→ 新 run_id → 写入 eval_history
-    │
-python -m eval.report --compare <run_id_before> <run_id_after>
-    → 自动产出 before/after CSV + 高亮改善/恶化项
+```mermaid
+flowchart TD
+    S1["eval.sh 每次执行<br/>自动生成 run_id"] --> W1["所有指标写入 eval_history"]
+    W1 --> S2["第二次执行（修复后）<br/>新 run_id 写入 eval_history"]
+    S2 --> C["python -m eval.report --compare 前run_id 后run_id"]
+    C --> Out["自动产出 before/after CSV<br/>高亮改善 / 恶化项"]
 ```
 
 #### 评估输出物管理（三层数据生命周期）
@@ -2217,20 +2054,7 @@ pyyaml==6.*
 
 ### 8.3 启动与评测脚本
 
-```bash
-# run.sh — 一键启动
-#!/bin/bash
-pip install -r requirements.txt
-mkdir -p data/{corpus,chroma,ocr,logs,eval/results}
-python -m api.app
-# 服务启动在 http://localhost:8000
-# API 文档: http://localhost:8000/docs
-
-# eval.sh — 一键评估
-#!/bin/bash
-python -m eval.runner --output workspace/results/
-echo "评估完成: workspace/results/report.csv"
-```
+一键启动 `run.sh` 与一键评估 `eval.sh` 位于仓库根目录。行为契约见 §6.3「一键评测脚本」与 README「快速开始」——脚本内含 key 前置检查、镜像兜底、空库引导、评估进度条、自动清缓存等完整逻辑，以脚本实现为准。
 
 ---
 
@@ -2385,5 +2209,3 @@ RRF_score(d) = Σ_{r ∈ R} 1 / (k + rank_r(d))
 ```
 
 ---
-
-> **文档结束** — 接下来进入实现计划阶段（writing-plans）。
