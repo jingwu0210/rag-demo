@@ -53,7 +53,7 @@ export PIP_INDEX_URL=https://pypi.org/simple
 | 2.3 | 日志字段字典 + 样本日志 | [deliverables/logs/](deliverables/logs/) |
 | 2.4 | Issue Diagnosis（4 案例） | [issue-diagnosis.html](https://jingwu0210.github.io/rag-demo/deliverables/diagnosis/issue-diagnosis.html) |
 | 2.5 | 运营报表 | [operations-report.html](https://jingwu0210.github.io/rag-demo/deliverables/op-reports/operations-report.html) |
-| 2.6 | 演示页面 | 在线 [http://localhost:8000/rag-gen-ai-service-demo](http://localhost:8000/rag-gen-ai-service-demo)（需启动服务） · 静态 [demo.html](https://jingwu0210.github.io/rag-demo/deliverables/demo/demo.html) |
+| 2.6 | 演示页面 | 在线 [http://localhost:8000/rag-gen-ai-service-demo](http://localhost:8000/rag-gen-ai-service-demo)（需启动服务） <br>静态 [demo.html](https://jingwu0210.github.io/rag-demo/deliverables/demo/demo.html) (服务不启动查看截图样例) |
 
 > HTML 版为最终交付形态（同设计系统，明暗双主题）；同名 `.md` 为源稿。演示页的在线链接需先 `./run.sh` 启动服务。HTML 报告链接指向 GitHub Pages（`https://jingwu0210.github.io/rag-demo/`），需在 Settings → Pages 启用「Deploy from a branch（main / root）」后生效。
 
